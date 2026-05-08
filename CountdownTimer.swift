@@ -110,7 +110,7 @@ class DarkButton: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let fraction = min(Double(minutes), 60.0) / 60.0
         guard fraction > 0 else { return }
-        NSColor(red: 0.13, green: 0.13, blue: 0.15, alpha: 1).setFill()
+        NSColor(white: 0, alpha: 0.25).setFill()
         if fraction >= 1.0 {
             NSBezierPath(ovalIn: bounds).fill()
         } else {
