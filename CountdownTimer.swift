@@ -1080,6 +1080,10 @@ class TimerViewController: NSViewController {
     }
 
     @objc private func togglePause() {
+        if phase == .overtime {
+            startTimer(totalSecs / 60)
+            return
+        }
         isPaused = !isPaused
         applyIcon(pauseBtn,
                   sfName: isPaused ? "play.fill" : "pause.fill",
@@ -1107,6 +1111,7 @@ class TimerViewController: NSViewController {
                 overtime = 0
                 ringView.setProgress(0, overtime: true)
                 overLabel.stringValue = "+00:00 OVER"
+                applyIcon(pauseBtn, sfName: "play.fill", tip: "Restart")
                 onExpiry()
             }
         } else if phase == .overtime {
