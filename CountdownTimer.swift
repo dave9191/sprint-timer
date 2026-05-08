@@ -637,6 +637,7 @@ class TimerViewController: NSViewController {
     @objc private func openSettings() {
         let opening = settingsOverlay.isHidden
         if opening {
+            HotkeyManager.shared.registerAll([])  // free up all combos while editing
             for (i, f) in settingsFields.enumerated() { f.stringValue = "\(config.buttons[i])" }
             chimeDefaultToggle.state = chimeOn ? .on : .off
             customInputToggle.state  = config.showCustomInput ? .on : .off
@@ -649,6 +650,7 @@ class TimerViewController: NSViewController {
         } else {
             hotkeyFields.forEach { $0.cancelRecording() }
             if let m = escMonitor { NSEvent.removeMonitor(m); escMonitor = nil }
+            registerHotkeys()  // restore (saved or unchanged) hotkeys
         }
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.15
