@@ -349,7 +349,7 @@ class TimerViewController: NSViewController {
     private var schedBarsHeightConstraint : NSLayoutConstraint!
     private var scheduleRefreshTimer      : Timer?
     private var scheduleRowStack      : NSStackView!
-    private var scheduleRowFields     : [(name: NSTextField, start: NSTextField, end: NSTextField)] = []
+    private var scheduleRowFields     : [(name: NSTextField, start: NSDatePicker, end: NSDatePicker)] = []
     private var schedulesEnabledToggle: NSButton!
 
     private let systemSounds = ["Basso", "Blow", "Bottle", "Frog", "Funk", "Glass",
@@ -687,27 +687,38 @@ class TimerViewController: NSViewController {
         insertScheduleRow(name: "", startMinutes: 540, endMinutes: 1020)
     }
 
+    private func makeTimePicker(minutes: Int) -> NSDatePicker {
+        let cal = Calendar.current
+        var comps = cal.dateComponents([.year, .month, .day], from: Date())
+        comps.hour   = minutes / 60
+        comps.minute = minutes % 60
+        comps.second = 0
+        let picker = NSDatePicker()
+        picker.datePickerStyle    = .textFieldAndStepper
+        picker.datePickerElements = .hourMinute
+        picker.dateValue          = cal.date(from: comps) ?? Date()
+        picker.isBordered         = true
+        picker.translatesAutoresizingMaskIntoConstraints = false
+        return picker
+    }
+
+    private func pickerMinutes(_ picker: NSDatePicker) -> Int {
+        let comps = Calendar.current.dateComponents([.hour, .minute], from: picker.dateValue)
+        return (comps.hour ?? 0) * 60 + (comps.minute ?? 0)
+    }
+
     private func insertScheduleRow(name: String, startMinutes: Int, endMinutes: Int) {
         let nameField = NSTextField()
         nameField.stringValue = name
         nameField.font = .systemFont(ofSize: 12)
         nameField.widthAnchor.constraint(equalToConstant: 78).isActive = true
 
-        let startField = NSTextField()
-        startField.stringValue = hhmm(startMinutes)
-        startField.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        startField.alignment = .center
-        startField.widthAnchor.constraint(equalToConstant: 52).isActive = true
+        let startField = makeTimePicker(minutes: startMinutes)
+        let endField   = makeTimePicker(minutes: endMinutes)
 
         let sep = NSTextField(labelWithString: "–")
         sep.textColor = dimText
         sep.font = .systemFont(ofSize: 12)
-
-        let endField = NSTextField()
-        endField.stringValue = hhmm(endMinutes)
-        endField.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        endField.alignment = .center
-        endField.widthAnchor.constraint(equalToConstant: 52).isActive = true
 
         let removeBtn = NSButton(title: "×", target: self, action: #selector(removeScheduleRow(_:)))
         removeBtn.isBordered = false
@@ -721,6 +732,16 @@ class TimerViewController: NSViewController {
 
         scheduleRowStack.addArrangedSubview(row)
         scheduleRowFields.append((name: nameField, start: startField, end: endField))
+        rebuildKeyViewChain()
+    }
+
+    private func rebuildKeyViewChain() {
+        for (i, fields) in scheduleRowFields.enumerated() {
+            let isLast = i == scheduleRowFields.count - 1
+            fields.name.nextKeyView  = fields.start
+            fields.start.nextKeyView = fields.end
+            fields.end.nextKeyView   = isLast ? scheduleRowFields[0].name : scheduleRowFields[i + 1].name
+        }
     }
 
     @objc private func removeScheduleRow(_ sender: NSButton) {
@@ -730,20 +751,9 @@ class TimerViewController: NSViewController {
         scheduleRowStack.removeArrangedSubview(row)
         row.removeFromSuperview()
         scheduleRowFields.remove(at: idx)
+        rebuildKeyViewChain()
     }
 
-    private func hhmm(_ minutes: Int) -> String {
-        String(format: "%02d:%02d", minutes / 60, minutes % 60)
-    }
-
-    private func parseHHMM(_ s: String) -> Int? {
-        let t = s.trimmingCharacters(in: .whitespaces)
-        let p = t.split(separator: ":")
-        guard p.count == 2,
-              let h = Int(p[0]), h >= 0, h <= 23,
-              let m = Int(p[1]), m >= 0, m <= 59 else { return nil }
-        return h * 60 + m
-    }
 
     @objc private func schedulesEnabledChanged() {
         let enabled = schedulesEnabledToggle.state == .on
@@ -838,12 +848,10 @@ class TimerViewController: NSViewController {
         var newSchedules: [ScheduleRange] = []
         for row in scheduleRowFields {
             let name = row.name.stringValue.trimmingCharacters(in: .whitespaces)
-            guard !name.isEmpty,
-                  let start = parseHHMM(row.start.stringValue),
-                  let end   = parseHHMM(row.end.stringValue) else {
-                NSSound.beep(); return
-            }
-            newSchedules.append(ScheduleRange(name: name, startMinutes: start, endMinutes: end))
+            guard !name.isEmpty else { NSSound.beep(); return }
+            newSchedules.append(ScheduleRange(name: name,
+                                              startMinutes: pickerMinutes(row.start),
+                                              endMinutes:   pickerMinutes(row.end)))
         }
 
         config = TimerConfig(
@@ -1213,6 +1221,7 @@ private class ContentView: NSView {
 private class FlippedView: NSView {
     override var isFlipped: Bool { true }
 }
+
 
 // MARK: - Schedule progress bars
 
