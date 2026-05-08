@@ -7,20 +7,23 @@ struct TimerConfig: Codable {
     var buttons: [Int]
     var soundName: String
     var chimeEnabled: Bool
+    var showCustomInput: Bool
 
-    static let `default` = TimerConfig(buttons: [5, 20, 30, 60], soundName: "Glass", chimeEnabled: true)
+    static let `default` = TimerConfig(buttons: [5, 20, 30, 60], soundName: "Glass", chimeEnabled: true, showCustomInput: false)
 
-    init(buttons: [Int], soundName: String = "Glass", chimeEnabled: Bool = true) {
+    init(buttons: [Int], soundName: String = "Glass", chimeEnabled: Bool = true, showCustomInput: Bool = false) {
         self.buttons = buttons
         self.soundName = soundName
         self.chimeEnabled = chimeEnabled
+        self.showCustomInput = showCustomInput
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        buttons      = try  c.decode([Int].self,    forKey: .buttons)
-        soundName    = (try? c.decode(String.self,  forKey: .soundName))    ?? "Glass"
-        chimeEnabled = (try? c.decode(Bool.self,    forKey: .chimeEnabled)) ?? true
+        buttons         = try  c.decode([Int].self,    forKey: .buttons)
+        soundName       = (try? c.decode(String.self,  forKey: .soundName))       ?? "Glass"
+        chimeEnabled    = (try? c.decode(Bool.self,    forKey: .chimeEnabled))    ?? true
+        showCustomInput = (try? c.decode(Bool.self,    forKey: .showCustomInput)) ?? false
     }
 }
 
@@ -235,6 +238,8 @@ class TimerViewController: NSViewController {
     private var previewPlayer       : AVAudioPlayer?
     private var escMonitor          : Any?
     private var customField         : NSTextField!
+    private var customTimerView     : CustomTimerView!
+    private var customInputToggle   : NSButton!
 
     private let systemSounds = ["Basso", "Blow", "Bottle", "Frog", "Funk", "Glass",
                                  "Hero", "Morse", "Ping", "Pop", "Purr", "Sosumi",
@@ -389,16 +394,23 @@ class TimerViewController: NSViewController {
         chimeDefaultToggle = NSButton(checkboxWithTitle: "On by default", target: self, action: #selector(chimeDefaultChanged))
         chimeDefaultToggle.state = chimeOn ? .on : .off
 
+        customInputToggle = NSButton(checkboxWithTitle: "Show custom input", target: self, action: #selector(customInputChanged))
+        customInputToggle.state = config.showCustomInput ? .on : .off
+
+        let durHeader = sectionHeader("BUTTON DURATIONS")
+        let sndHeader = sectionHeader("SOUND")
+
         let contentStack = NSStackView(views:
-            [sectionHeader("BUTTON DURATIONS")] + buttonRows +
-            [sectionHeader("SOUND"), soundRow, chimeDefaultToggle]
+            [durHeader] + buttonRows +
+            [sndHeader, soundRow, chimeDefaultToggle, customInputToggle]
         )
         contentStack.orientation = .vertical
-        contentStack.spacing = 8
+        contentStack.spacing = 6
         contentStack.alignment = .leading
-        contentStack.setCustomSpacing(10, after: contentStack.arrangedSubviews[0])
-        contentStack.setCustomSpacing(14, after: buttonRows.last!)
-        contentStack.setCustomSpacing(8,  after: contentStack.arrangedSubviews[5])
+        contentStack.setCustomSpacing(8,  after: durHeader)
+        contentStack.setCustomSpacing(10, after: buttonRows.last!)
+        contentStack.setCustomSpacing(6,  after: sndHeader)
+        contentStack.setCustomSpacing(10, after: chimeDefaultToggle)
         contentStack.translatesAutoresizingMaskIntoConstraints = false
         settingsOverlay.addSubview(contentStack)
 
@@ -425,6 +437,10 @@ class TimerViewController: NSViewController {
     @objc private func chimeDefaultChanged() {
         chimeOn = chimeDefaultToggle.state == .on
         updateChimeIcon()
+    }
+
+    @objc private func customInputChanged() {
+        customTimerView.isHidden = customInputToggle.state != .on
     }
 
     @objc private func previewSound() {
@@ -464,6 +480,7 @@ class TimerViewController: NSViewController {
         if opening {
             for (i, f) in settingsFields.enumerated() { f.stringValue = "\(config.buttons[i])" }
             chimeDefaultToggle.state = chimeOn ? .on : .off
+            customInputToggle.state  = config.showCustomInput ? .on : .off
             settingsOverlay.isHidden = false
             escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 if event.keyCode == 53 { self?.openSettings(); return nil }
@@ -497,7 +514,8 @@ class TimerViewController: NSViewController {
         config = TimerConfig(
             buttons: newButtons,
             soundName: soundPopup.titleOfSelectedItem ?? config.soundName,
-            chimeEnabled: chimeDefaultToggle.state == .on
+            chimeEnabled: chimeDefaultToggle.state == .on,
+            showCustomInput: customInputToggle.state == .on
         )
         ConfigManager.shared.save(config)
         refreshSelectButtons()
@@ -519,12 +537,12 @@ class TimerViewController: NSViewController {
         let row1 = hrow(selBtns[0], selBtns[1])
         let row2 = hrow(selBtns[2], selBtns[3])
 
-        let customView = CustomTimerView()
-        customView.translatesAutoresizingMaskIntoConstraints = false
-        // match the width of the two-button rows exactly
-        customView.widthAnchor.constraint(equalToConstant: 176).isActive = true
-        customView.heightAnchor.constraint(equalToConstant: 44).isActive = true
-        customField = customView.field
+        customTimerView = CustomTimerView()
+        customTimerView.translatesAutoresizingMaskIntoConstraints = false
+        customTimerView.widthAnchor.constraint(equalToConstant: 176).isActive = true
+        customTimerView.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        customTimerView.isHidden = !config.showCustomInput
+        customField = customTimerView.field
         customField.textColor = bright
         customField.font = .systemFont(ofSize: 17, weight: .medium)
         customField.alignment = .center
@@ -543,7 +561,7 @@ class TimerViewController: NSViewController {
         selectStack.spacing = 16
         selectStack.addArrangedSubview(row1)
         selectStack.addArrangedSubview(row2)
-        selectStack.addArrangedSubview(customView)
+        selectStack.addArrangedSubview(customTimerView)
     }
 
     @objc private func runCustomTimer() {
