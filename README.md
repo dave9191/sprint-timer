@@ -2,6 +2,14 @@
 
 A minimal macOS focus timer designed for ADHD brains. No tasks, no productivity system, no streaks — just a clean countdown to help you start and stay in motion.
 
+Main view: 
+<img width="302" height="344" alt="sprint-timer-main" src="https://github.com/user-attachments/assets/17a7fd5e-9c82-4ecc-9fb3-7d9d494d358e" />
+
+Countdown view:
+<img width="304" height="341" alt="sprint-timer-countdown" src="https://github.com/user-attachments/assets/17b38ab4-61f6-4e85-b5da-5f1dc2d25462" />
+
+
+
 ![macOS 12+](https://img.shields.io/badge/macOS-12%2B-black) ![Swift](https://img.shields.io/badge/Swift-5.9-orange)
 
 ---
