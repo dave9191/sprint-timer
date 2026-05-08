@@ -1095,6 +1095,9 @@ class HotkeyField: NSView {
             clearBtn.widthAnchor.constraint(equalToConstant: 18),
         ])
 
+        let gr = NSClickGestureRecognizer(target: self, action: #selector(startRecording))
+        gr.delegate = self
+        addGestureRecognizer(gr)
     }
 
     private func update() {
@@ -1115,15 +1118,6 @@ class HotkeyField: NSView {
             layer?.borderColor = NSColor.white.withAlphaComponent(0.09).cgColor
         }
         clearBtn.isHidden = hotkeyDef == nil || recording
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        let loc = convert(event.locationInWindow, from: nil)
-        if !clearBtn.isHidden && clearBtn.frame.contains(loc) {
-            super.mouseDown(with: event)
-            return
-        }
-        startRecording()
     }
 
     @objc private func startRecording() {
@@ -1237,5 +1231,13 @@ class HotkeyField: NSView {
         if flags.contains(.option)  { m |= UInt32(optionKey) }
         if flags.contains(.control) { m |= UInt32(controlKey) }
         return m
+    }
+}
+
+extension HotkeyField: NSGestureRecognizerDelegate {
+    func gestureRecognizer(_ gr: NSGestureRecognizer,
+                           shouldAttemptToRecognizeWith event: NSEvent) -> Bool {
+        let loc = convert(event.locationInWindow, from: nil)
+        return clearBtn.isHidden || !clearBtn.frame.contains(loc)
     }
 }
