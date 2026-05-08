@@ -133,7 +133,7 @@ class DarkButton: NSView {
         layer?.borderWidth = 0.5
         layer?.borderColor = NSColor.white.withAlphaComponent(0.09).cgColor
         label.stringValue = title
-        label.font = .systemFont(ofSize: 24, weight: .semibold)
+        label.font = .systemFont(ofSize: 20, weight: .semibold)
         label.textColor = bright
         label.alignment = .center
         label.translatesAutoresizingMaskIntoConstraints = false
@@ -502,15 +502,15 @@ class TimerViewController: NSViewController {
             let btn = DarkButton(title: "\(mins)")
             btn.minutes = mins
             btn.translatesAutoresizingMaskIntoConstraints = false
-            btn.widthAnchor.constraint(equalToConstant: 100).isActive = true
-            btn.heightAnchor.constraint(equalToConstant: 100).isActive = true
+            btn.widthAnchor.constraint(equalToConstant: 80).isActive = true
+            btn.heightAnchor.constraint(equalToConstant: 80).isActive = true
             btn.action = { [weak self] in self?.startTimer(mins) }
             return btn
         }
         let row1 = hrow(selBtns[0], selBtns[1])
         let row2 = hrow(selBtns[2], selBtns[3])
         selectStack.orientation = .vertical
-        selectStack.spacing = 10
+        selectStack.spacing = 16
         selectStack.addArrangedSubview(row1)
         selectStack.addArrangedSubview(row2)
     }
@@ -518,7 +518,7 @@ class TimerViewController: NSViewController {
     private func hrow(_ a: NSView, _ b: NSView) -> NSStackView {
         let s = NSStackView(views: [a, b])
         s.orientation = .horizontal
-        s.spacing = 10
+        s.spacing = 16
         return s
     }
 
