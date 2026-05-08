@@ -41,7 +41,7 @@ let delegate = AppDelegate()
 app.delegate = delegate
 app.run()
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var window: NSPanel!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -60,9 +60,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.backgroundColor = NSColor(red: 0.10, green: 0.10, blue: 0.11, alpha: 1)
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.canJoinAllSpaces, .stationary]
+        window.delegate = self
         window.center()
         window.contentViewController = TimerViewController()
         window.makeKeyAndOrderFront(nil)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        NSApp.terminate(nil)
     }
 }
 
