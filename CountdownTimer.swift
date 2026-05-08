@@ -36,6 +36,10 @@ final class ConfigManager {
 
 // MARK: - App entry
 
+private class SprintPanel: NSPanel {
+    override func cancelOperation(_ sender: Any?) {}
+}
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
@@ -47,7 +51,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         app.setActivationPolicy(.accessory)
         let rect = NSRect(x: 0, y: 0, width: 300, height: 340)
-        window = NSPanel(
+        window = SprintPanel(
             contentRect: rect,
             styleMask: [.titled, .closable, .fullSizeContentView, .nonactivatingPanel],
             backing: .buffered,
@@ -183,6 +187,7 @@ class TimerViewController: NSViewController {
     private var selBtns        : [DarkButton] = []
     private var settingsOverlay: NSView!
     private var settingsFields : [NSTextField] = []
+    private var escMonitor     : Any?
 
     override func loadView() {
         view = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 340))
@@ -363,6 +368,12 @@ class TimerViewController: NSViewController {
         if opening {
             for (i, f) in settingsFields.enumerated() { f.stringValue = "\(config.buttons[i])" }
             settingsOverlay.isHidden = false
+            escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                if event.keyCode == 53 { self?.openSettings(); return nil }
+                return event
+            }
+        } else {
+            if let m = escMonitor { NSEvent.removeMonitor(m); escMonitor = nil }
         }
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.15
@@ -371,6 +382,10 @@ class TimerViewController: NSViewController {
         } completionHandler: { [weak self] in
             if !opening { self?.settingsOverlay.isHidden = true }
         }
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        if !settingsOverlay.isHidden { openSettings() }
     }
 
     @objc private func saveSettings() {
