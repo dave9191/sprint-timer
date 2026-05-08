@@ -533,6 +533,13 @@ class TimerViewController: NSViewController {
             return makeHotkeyRow(label: lbl, field: field)
         }
 
+        // Cancel any other recording field when one starts
+        for field in hotkeyFields {
+            field.onStartRecording = { [weak self, weak field] in
+                self?.hotkeyFields.forEach { f in if f !== field { f.cancelRecording() } }
+            }
+        }
+
         let durHeader = sectionHeader("BUTTON DURATIONS")
         let sndHeader = sectionHeader("SOUND")
         let hkHeader  = sectionHeader("HOTKEYS")
@@ -1034,11 +1041,13 @@ private class FlippedView: NSView {
 
 class HotkeyField: NSView {
     var hotkeyDef: HotkeyDef? { didSet { update() } }
+    var onStartRecording: (() -> Void)?
 
     private let label    = NSTextField(labelWithString: "")
     private let clearBtn = NSButton()
-    private var recording   = false
-    private var keyMonitor  : Any?
+    private var recording     = false
+    private var keyMonitor    : Any?
+    private var mouseMonitor  : Any?
 
     private let surface       = NSColor(red: 0.18, green: 0.18, blue: 0.20, alpha: 1)
     private let hoveredColor  = NSColor(red: 0.23, green: 0.23, blue: 0.25, alpha: 1)
@@ -1086,7 +1095,6 @@ class HotkeyField: NSView {
             clearBtn.widthAnchor.constraint(equalToConstant: 18),
         ])
 
-        addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(startRecording)))
     }
 
     private func update() {
@@ -1109,13 +1117,29 @@ class HotkeyField: NSView {
         clearBtn.isHidden = hotkeyDef == nil || recording
     }
 
+    override func mouseDown(with event: NSEvent) {
+        let loc = convert(event.locationInWindow, from: nil)
+        if !clearBtn.isHidden && clearBtn.frame.contains(loc) {
+            super.mouseDown(with: event)
+            return
+        }
+        startRecording()
+    }
+
     @objc private func startRecording() {
         guard !recording else { return }
+        onStartRecording?()
         recording = true
         update()
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.handleKey(event)
             return nil  // consume all keys while recording
+        }
+        mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            guard let self = self, self.recording else { return event }
+            let loc = self.convert(event.locationInWindow, from: nil)
+            if !self.bounds.contains(loc) { self.cancelRecording() }
+            return event
         }
     }
 
@@ -1125,7 +1149,8 @@ class HotkeyField: NSView {
     }
 
     private func stopRecording() {
-        if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
+        if let m = keyMonitor   { NSEvent.removeMonitor(m); keyMonitor   = nil }
+        if let m = mouseMonitor { NSEvent.removeMonitor(m); mouseMonitor = nil }
         recording = false
         update()
     }
