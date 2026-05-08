@@ -525,7 +525,6 @@ class TimerViewController: NSViewController {
             settingsOverlay.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
 
-        // Save button pinned to bottom (above the bars area)
         let saveBtn = NSButton(title: "Save", target: self, action: #selector(saveSettings))
         saveBtn.bezelStyle = .rounded
         saveBtn.translatesAutoresizingMaskIntoConstraints = false
@@ -535,114 +534,152 @@ class TimerViewController: NSViewController {
             saveBtn.centerXAnchor.constraint(equalTo: settingsOverlay.centerXAnchor),
         ])
 
-        // Scroll view fills overlay above save button
-        let scrollView = NSScrollView()
-        scrollView.hasVerticalScroller = true
-        scrollView.autohidesScrollers = true
-        scrollView.drawsBackground = false
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        settingsOverlay.addSubview(scrollView)
+        let tabView = NSTabView()
+        tabView.translatesAutoresizingMaskIntoConstraints = false
+        settingsOverlay.addSubview(tabView)
         NSLayoutConstraint.activate([
-            scrollView.topAnchor.constraint(equalTo: settingsOverlay.topAnchor, constant: 20),
-            scrollView.leadingAnchor.constraint(equalTo: settingsOverlay.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: settingsOverlay.trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: saveBtn.topAnchor, constant: -8),
+            tabView.topAnchor.constraint(equalTo: settingsOverlay.topAnchor, constant: 28),
+            tabView.leadingAnchor.constraint(equalTo: settingsOverlay.leadingAnchor, constant: 4),
+            tabView.trailingAnchor.constraint(equalTo: settingsOverlay.trailingAnchor, constant: -4),
+            tabView.bottomAnchor.constraint(equalTo: saveBtn.topAnchor, constant: -8),
         ])
 
-        let docView = FlippedView()
-        docView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.documentView = docView
+        // MARK: General tab
+        let generalItem = NSTabViewItem()
+        generalItem.label = "General"
+        tabView.addTabViewItem(generalItem)
+        if let pane = generalItem.view {
+            settingsFields = []
+            let buttonRows = (0..<4).map { makeSettingsRow(index: $0) }
 
-        // Button durations section
-        settingsFields = []
-        let buttonRows = (0..<4).map { makeSettingsRow(index: $0) }
+            let soundLbl = NSTextField(labelWithString: "Sound")
+            soundLbl.font = .systemFont(ofSize: 13)
+            soundLbl.textColor = bright
+            soundLbl.widthAnchor.constraint(equalToConstant: 64).isActive = true
 
-        // Sound section
-        let soundLbl = NSTextField(labelWithString: "Sound")
-        soundLbl.font = .systemFont(ofSize: 13)
-        soundLbl.textColor = bright
-        soundLbl.widthAnchor.constraint(equalToConstant: 64).isActive = true
+            soundPopup = NSPopUpButton()
+            soundPopup.addItems(withTitles: systemSounds)
+            soundPopup.selectItem(withTitle: config.soundName)
+            soundPopup.target = self
+            soundPopup.action = #selector(previewSound)
+            soundPopup.widthAnchor.constraint(equalToConstant: 120).isActive = true
 
-        soundPopup = NSPopUpButton()
-        soundPopup.addItems(withTitles: systemSounds)
-        soundPopup.selectItem(withTitle: config.soundName)
-        soundPopup.target = self
-        soundPopup.action = #selector(previewSound)
-        soundPopup.widthAnchor.constraint(equalToConstant: 120).isActive = true
+            let soundRow = NSStackView(views: [soundLbl, soundPopup])
+            soundRow.orientation = .horizontal
+            soundRow.spacing = 8
 
-        let soundRow = NSStackView(views: [soundLbl, soundPopup])
-        soundRow.orientation = .horizontal
-        soundRow.spacing = 8
+            chimeDefaultToggle = NSButton(checkboxWithTitle: "On by default",
+                                          target: self, action: #selector(chimeDefaultChanged))
+            chimeDefaultToggle.state = chimeOn ? .on : .off
 
-        chimeDefaultToggle = NSButton(checkboxWithTitle: "On by default", target: self, action: #selector(chimeDefaultChanged))
-        chimeDefaultToggle.state = chimeOn ? .on : .off
+            customInputToggle = NSButton(checkboxWithTitle: "Show custom input",
+                                         target: self, action: #selector(customInputChanged))
+            customInputToggle.state = config.showCustomInput ? .on : .off
 
-        customInputToggle = NSButton(checkboxWithTitle: "Show custom input", target: self, action: #selector(customInputChanged))
-        customInputToggle.state = config.showCustomInput ? .on : .off
+            let durHeader = sectionHeader("BUTTON DURATIONS")
+            let sndHeader = sectionHeader("SOUND")
 
-        // Hotkeys section
-        hotkeyFields = []
-        let hotkeyLabels = ["Start Timer 1", "Start Timer 2", "Start Timer 3",
-                            "Start Timer 4", "Pause / Resume", "Cancel"]
-        let hotkeyRows = hotkeyLabels.enumerated().map { (i, lbl) -> NSView in
-            let field = HotkeyField(def: config.hotkeys[i])
-            hotkeyFields.append(field)
-            return makeHotkeyRow(label: lbl, field: field)
+            var views: [NSView] = [durHeader]
+            views += buttonRows
+            views += [sndHeader, soundRow, chimeDefaultToggle, customInputToggle]
+            let stack = NSStackView(views: views)
+            stack.orientation = .vertical
+            stack.spacing = 6
+            stack.alignment = .leading
+            stack.setCustomSpacing(8,  after: durHeader)
+            stack.setCustomSpacing(10, after: buttonRows.last!)
+            stack.setCustomSpacing(6,  after: sndHeader)
+            stack.setCustomSpacing(8,  after: soundRow)
+            stack.translatesAutoresizingMaskIntoConstraints = false
+            pane.addSubview(stack)
+            NSLayoutConstraint.activate([
+                stack.topAnchor.constraint(equalTo: pane.topAnchor, constant: 10),
+                stack.leadingAnchor.constraint(equalTo: pane.leadingAnchor, constant: 12),
+                stack.trailingAnchor.constraint(lessThanOrEqualTo: pane.trailingAnchor, constant: -12),
+            ])
         }
-        for field in hotkeyFields {
-            field.onStartRecording = { [weak self, weak field] in
-                self?.hotkeyFields.forEach { f in if f !== field { f.cancelRecording() } }
+
+        // MARK: Hot Keys tab
+        let hotkeyItem = NSTabViewItem()
+        hotkeyItem.label = "Hot Keys"
+        tabView.addTabViewItem(hotkeyItem)
+        if let pane = hotkeyItem.view {
+            hotkeyFields = []
+            let labels = ["Start Timer 1", "Start Timer 2", "Start Timer 3",
+                          "Start Timer 4", "Pause / Resume", "Cancel"]
+            let rows = labels.enumerated().map { (i, lbl) -> NSView in
+                let field = HotkeyField(def: config.hotkeys[i])
+                hotkeyFields.append(field)
+                return makeHotkeyRow(label: lbl, field: field)
             }
+            for field in hotkeyFields {
+                field.onStartRecording = { [weak self, weak field] in
+                    self?.hotkeyFields.forEach { f in if f !== field { f.cancelRecording() } }
+                }
+            }
+            let stack = NSStackView(views: rows)
+            stack.orientation = .vertical
+            stack.spacing = 6
+            stack.alignment = .leading
+            stack.translatesAutoresizingMaskIntoConstraints = false
+            pane.addSubview(stack)
+            NSLayoutConstraint.activate([
+                stack.topAnchor.constraint(equalTo: pane.topAnchor, constant: 10),
+                stack.leadingAnchor.constraint(equalTo: pane.leadingAnchor, constant: 12),
+                stack.trailingAnchor.constraint(lessThanOrEqualTo: pane.trailingAnchor, constant: -12),
+            ])
         }
 
-        // Schedules section
-        schedulesEnabledToggle = NSButton(checkboxWithTitle: "Show schedule bars",
-                                          target: self, action: #selector(schedulesEnabledChanged))
-        schedulesEnabledToggle.state = config.schedulesEnabled ? .on : .off
+        // MARK: Schedules tab
+        let schedItem = NSTabViewItem()
+        schedItem.label = "Schedules"
+        tabView.addTabViewItem(schedItem)
+        if let pane = schedItem.view {
+            schedulesEnabledToggle = NSButton(checkboxWithTitle: "Show schedule bars",
+                                              target: self, action: #selector(schedulesEnabledChanged))
+            schedulesEnabledToggle.state = config.schedulesEnabled ? .on : .off
 
-        scheduleRowStack = NSStackView()
-        scheduleRowStack.orientation = .vertical
-        scheduleRowStack.spacing = 6
-        scheduleRowStack.alignment = .leading
+            scheduleRowStack = NSStackView()
+            scheduleRowStack.orientation = .vertical
+            scheduleRowStack.spacing = 6
+            scheduleRowStack.alignment = .leading
 
-        let addSchedBtn = NSButton(title: "+ Add", target: self, action: #selector(addScheduleRowEmpty))
-        addSchedBtn.bezelStyle = .inline
-        addSchedBtn.font = .systemFont(ofSize: 11)
+            let addSchedBtn = NSButton(title: "+ Add", target: self, action: #selector(addScheduleRowEmpty))
+            addSchedBtn.bezelStyle = .inline
+            addSchedBtn.font = .systemFont(ofSize: 11)
 
-        let durHeader  = sectionHeader("BUTTON DURATIONS")
-        let sndHeader  = sectionHeader("SOUND")
-        let hkHeader   = sectionHeader("HOTKEYS")
-        let schHeader  = sectionHeader("SCHEDULES")
+            let scrollView = NSScrollView()
+            scrollView.hasVerticalScroller = true
+            scrollView.autohidesScrollers = true
+            scrollView.drawsBackground = false
+            scrollView.translatesAutoresizingMaskIntoConstraints = false
+            pane.addSubview(scrollView)
 
-        var allViews: [NSView] = [durHeader]
-        allViews += buttonRows
-        allViews += [sndHeader, soundRow, chimeDefaultToggle, customInputToggle, hkHeader]
-        allViews += hotkeyRows
-        allViews += [schHeader, schedulesEnabledToggle, scheduleRowStack, addSchedBtn]
-        let contentStack = NSStackView(views: allViews)
-        contentStack.orientation = .vertical
-        contentStack.spacing = 6
-        contentStack.alignment = .leading
-        contentStack.setCustomSpacing(8,  after: durHeader)
-        contentStack.setCustomSpacing(10, after: buttonRows.last!)
-        contentStack.setCustomSpacing(6,  after: sndHeader)
-        contentStack.setCustomSpacing(10, after: chimeDefaultToggle)
-        contentStack.setCustomSpacing(10, after: customInputToggle)
-        contentStack.setCustomSpacing(8,  after: hkHeader)
-        contentStack.setCustomSpacing(10, after: hotkeyRows.last!)
-        contentStack.setCustomSpacing(6,  after: schHeader)
-        contentStack.setCustomSpacing(8,  after: schedulesEnabledToggle)
-        contentStack.setCustomSpacing(8,  after: scheduleRowStack)
-        contentStack.translatesAutoresizingMaskIntoConstraints = false
-        docView.addSubview(contentStack)
+            let docView = FlippedView()
+            docView.translatesAutoresizingMaskIntoConstraints = false
+            scrollView.documentView = docView
 
-        NSLayoutConstraint.activate([
-            contentStack.topAnchor.constraint(equalTo: docView.topAnchor, constant: 10),
-            contentStack.leadingAnchor.constraint(equalTo: docView.leadingAnchor, constant: 20),
-            contentStack.trailingAnchor.constraint(equalTo: docView.trailingAnchor, constant: -20),
-            contentStack.bottomAnchor.constraint(equalTo: docView.bottomAnchor, constant: -10),
-            docView.widthAnchor.constraint(equalTo: scrollView.widthAnchor),
-        ])
+            let stack = NSStackView(views: [schedulesEnabledToggle, scheduleRowStack, addSchedBtn])
+            stack.orientation = .vertical
+            stack.spacing = 8
+            stack.alignment = .leading
+            stack.translatesAutoresizingMaskIntoConstraints = false
+            docView.addSubview(stack)
+
+            NSLayoutConstraint.activate([
+                scrollView.topAnchor.constraint(equalTo: pane.topAnchor),
+                scrollView.leadingAnchor.constraint(equalTo: pane.leadingAnchor),
+                scrollView.trailingAnchor.constraint(equalTo: pane.trailingAnchor),
+                scrollView.bottomAnchor.constraint(equalTo: pane.bottomAnchor),
+                stack.topAnchor.constraint(equalTo: docView.topAnchor, constant: 10),
+                stack.leadingAnchor.constraint(equalTo: docView.leadingAnchor, constant: 12),
+                stack.trailingAnchor.constraint(equalTo: docView.trailingAnchor, constant: -12),
+                stack.bottomAnchor.constraint(equalTo: docView.bottomAnchor, constant: -10),
+                docView.widthAnchor.constraint(equalTo: scrollView.widthAnchor),
+            ])
+
+            populateScheduleRows()
+        }
     }
 
     private func sectionHeader(_ title: String) -> NSTextField {
