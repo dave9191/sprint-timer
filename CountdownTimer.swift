@@ -352,8 +352,8 @@ class TimerViewController: NSViewController {
         soundRow.orientation = .horizontal
         soundRow.spacing = 8
 
-        chimeDefaultToggle = NSButton(checkboxWithTitle: "On by default", target: nil, action: nil)
-        chimeDefaultToggle.state = config.chimeEnabled ? .on : .off
+        chimeDefaultToggle = NSButton(checkboxWithTitle: "On by default", target: self, action: #selector(chimeDefaultChanged))
+        chimeDefaultToggle.state = chimeOn ? .on : .off
 
         let contentStack = NSStackView(views:
             [sectionHeader("BUTTON DURATIONS")] + buttonRows +
@@ -386,6 +386,11 @@ class TimerViewController: NSViewController {
         lbl.font = .systemFont(ofSize: 10, weight: .semibold)
         lbl.textColor = dimText
         return lbl
+    }
+
+    @objc private func chimeDefaultChanged() {
+        chimeOn = chimeDefaultToggle.state == .on
+        updateChimeIcon()
     }
 
     @objc private func previewSound() {
@@ -424,6 +429,7 @@ class TimerViewController: NSViewController {
         let opening = settingsOverlay.isHidden
         if opening {
             for (i, f) in settingsFields.enumerated() { f.stringValue = "\(config.buttons[i])" }
+            chimeDefaultToggle.state = chimeOn ? .on : .off
             settingsOverlay.isHidden = false
             escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 if event.keyCode == 53 { self?.openSettings(); return nil }
