@@ -81,7 +81,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.canJoinAllSpaces, .stationary]
         window.delegate = self
-        window.center()
+        window.setFrameAutosaveName("SprintTimerMainWindow")
+        if !window.setFrameUsingName("SprintTimerMainWindow") {
+            window.center()
+        }
         window.contentViewController = TimerViewController()
         window.makeKeyAndOrderFront(nil)
     }
@@ -231,15 +234,21 @@ class TimerViewController: NSViewController {
     private var chimeDefaultToggle  : NSButton!
     private var previewPlayer       : AVAudioPlayer?
     private var escMonitor          : Any?
+    private var customField         : NSTextField!
 
     private let systemSounds = ["Basso", "Blow", "Bottle", "Frog", "Funk", "Glass",
                                  "Hero", "Morse", "Ping", "Pop", "Purr", "Sosumi",
                                  "Submarine", "Tink"]
 
     override func loadView() {
-        view = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 340))
+        view = ContentView(frame: NSRect(x: 0, y: 0, width: 300, height: 340))
         view.wantsLayer = true
         view.layer?.backgroundColor = bg.cgColor
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        view.window?.makeFirstResponder(nil)
     }
 
     override func viewDidLoad() {
@@ -509,10 +518,43 @@ class TimerViewController: NSViewController {
         }
         let row1 = hrow(selBtns[0], selBtns[1])
         let row2 = hrow(selBtns[2], selBtns[3])
+
+        let customView = CustomTimerView()
+        customView.translatesAutoresizingMaskIntoConstraints = false
+        // match the width of the two-button rows exactly
+        customView.widthAnchor.constraint(equalToConstant: 176).isActive = true
+        customView.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        customField = customView.field
+        customField.textColor = bright
+        customField.font = .systemFont(ofSize: 17, weight: .medium)
+        customField.alignment = .center
+        let para = NSMutableParagraphStyle()
+        para.alignment = .center
+        customField.placeholderAttributedString = NSAttributedString(
+            string: "custom",
+            attributes: [.foregroundColor: dimText,
+                         .font: NSFont.systemFont(ofSize: 17, weight: .medium),
+                         .paragraphStyle: para]
+        )
+        customField.target = self
+        customField.action = #selector(runCustomTimer)
+
         selectStack.orientation = .vertical
         selectStack.spacing = 16
         selectStack.addArrangedSubview(row1)
         selectStack.addArrangedSubview(row2)
+        selectStack.addArrangedSubview(customView)
+    }
+
+    @objc private func runCustomTimer() {
+        guard let mins = Int(customField.stringValue.trimmingCharacters(in: .whitespaces)),
+              mins > 0 else {
+            NSSound.beep()
+            return
+        }
+        customField.stringValue = ""
+        view.window?.makeFirstResponder(nil)
+        startTimer(mins)
     }
 
     private func hrow(_ a: NSView, _ b: NSView) -> NSStackView {
@@ -707,7 +749,11 @@ class TimerViewController: NSViewController {
         String(format: "%02d:%02d", abs(s) / 60, abs(s) % 60)
     }
 
-    private func showSelect() { selectStack.isHidden = false; timerStack.isHidden = true }
+    private func showSelect() {
+        selectStack.isHidden = false
+        timerStack.isHidden = true
+        view.window?.makeFirstResponder(nil)
+    }
     private func showTimer()  { selectStack.isHidden = true;  timerStack.isHidden = false }
 }
 
@@ -757,3 +803,49 @@ class RingView: NSView {
     }
 }
 
+// MARK: - Custom timer input
+
+class CustomTimerView: NSView {
+    let field = NSTextField()
+    private let surface = NSColor(red: 0.18, green: 0.18, blue: 0.20, alpha: 1)
+    private let hovered = NSColor(red: 0.23, green: 0.23, blue: 0.25, alpha: 1)
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.backgroundColor = surface.cgColor
+        layer?.cornerRadius = 12
+        layer?.borderWidth = 0.5
+        layer?.borderColor = NSColor.white.withAlphaComponent(0.09).cgColor
+
+        field.drawsBackground = false
+        field.isBezeled = false
+        field.isBordered = false
+        field.focusRingType = .none
+        field.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(field)
+        NSLayoutConstraint.activate([
+            field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            field.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            field.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach { removeTrackingArea($0) }
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways], owner: self))
+    }
+    override func mouseEntered(with event: NSEvent) { layer?.backgroundColor = hovered.cgColor }
+    override func mouseExited(with event: NSEvent)  { layer?.backgroundColor = surface.cgColor }
+}
+
+// MARK: - Content view
+
+private class ContentView: NSView {
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(nil)
+        super.mouseDown(with: event)
+    }
+}
