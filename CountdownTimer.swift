@@ -5,7 +5,23 @@ import AVFoundation
 
 struct TimerConfig: Codable {
     var buttons: [Int]
-    static let `default` = TimerConfig(buttons: [5, 20, 30, 60])
+    var soundName: String
+    var chimeEnabled: Bool
+
+    static let `default` = TimerConfig(buttons: [5, 20, 30, 60], soundName: "Glass", chimeEnabled: true)
+
+    init(buttons: [Int], soundName: String = "Glass", chimeEnabled: Bool = true) {
+        self.buttons = buttons
+        self.soundName = soundName
+        self.chimeEnabled = chimeEnabled
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        buttons      = try  c.decode([Int].self,    forKey: .buttons)
+        soundName    = (try? c.decode(String.self,  forKey: .soundName))    ?? "Glass"
+        chimeEnabled = (try? c.decode(Bool.self,    forKey: .chimeEnabled)) ?? true
+    }
 }
 
 final class ConfigManager {
@@ -125,10 +141,9 @@ class DarkButton: NSView {
 class ChimePlayer {
     private var players: [AVAudioPlayer] = []
 
-    func playDoubleChime() {
-        guard let url = Bundle.main.url(forResource: "Glass", withExtension: "aiff",
-                                        subdirectory: nil)
-            ?? URL(fileURLWithPath: "/System/Library/Sounds/Glass.aiff") as URL? else { return }
+    func playDoubleChime(sound: String) {
+        let url = Bundle.main.url(forResource: sound, withExtension: "aiff")
+            ?? URL(fileURLWithPath: "/System/Library/Sounds/\(sound).aiff")
         playAt(url, delay: 0)
         playAt(url, delay: 0.55)
     }
@@ -170,7 +185,7 @@ class TimerViewController: NSViewController {
     private var remaining   = 0
     private var overtime    = 0
     private var isPaused    = false
-    private var chimeOn     = true
+    private lazy var chimeOn: Bool = config.chimeEnabled
     private var ticker      : Timer?
     private var pulseTimer  : Timer?
     private var pulsePhase  = false
@@ -183,11 +198,18 @@ class TimerViewController: NSViewController {
     private let dimText    = NSColor(red: 0.38, green: 0.38, blue: 0.40, alpha: 1)
     private let bright     = NSColor(red: 0.95, green: 0.93, blue: 0.90, alpha: 1)
 
-    private var config         = ConfigManager.shared.load()
-    private var selBtns        : [DarkButton] = []
-    private var settingsOverlay: NSView!
-    private var settingsFields : [NSTextField] = []
-    private var escMonitor     : Any?
+    private var config              = ConfigManager.shared.load()
+    private var selBtns             : [DarkButton] = []
+    private var settingsOverlay     : NSView!
+    private var settingsFields      : [NSTextField] = []
+    private var soundPopup          : NSPopUpButton!
+    private var chimeDefaultToggle  : NSButton!
+    private var previewPlayer       : AVAudioPlayer?
+    private var escMonitor          : Any?
+
+    private let systemSounds = ["Basso", "Blow", "Bottle", "Frog", "Funk", "Glass",
+                                 "Hero", "Morse", "Ping", "Pop", "Purr", "Sosumi",
+                                 "Submarine", "Tink"]
 
     override func loadView() {
         view = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 340))
@@ -309,20 +331,42 @@ class TimerViewController: NSViewController {
             settingsOverlay.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
 
-        let header = NSTextField(labelWithString: "BUTTON DURATIONS")
-        header.font = .systemFont(ofSize: 10, weight: .semibold)
-        header.textColor = dimText
-        header.translatesAutoresizingMaskIntoConstraints = false
-        settingsOverlay.addSubview(header)
-
+        // Button durations section
         settingsFields = []
-        let rowViews = (0..<4).map { makeSettingsRow(index: $0) }
-        let rowStack = NSStackView(views: rowViews)
-        rowStack.orientation = .vertical
-        rowStack.spacing = 10
-        rowStack.alignment = .leading
-        rowStack.translatesAutoresizingMaskIntoConstraints = false
-        settingsOverlay.addSubview(rowStack)
+        let buttonRows = (0..<4).map { makeSettingsRow(index: $0) }
+
+        // Sound section
+        let soundLbl = NSTextField(labelWithString: "Sound")
+        soundLbl.font = .systemFont(ofSize: 13)
+        soundLbl.textColor = bright
+        soundLbl.widthAnchor.constraint(equalToConstant: 64).isActive = true
+
+        soundPopup = NSPopUpButton()
+        soundPopup.addItems(withTitles: systemSounds)
+        soundPopup.selectItem(withTitle: config.soundName)
+        soundPopup.target = self
+        soundPopup.action = #selector(previewSound)
+        soundPopup.widthAnchor.constraint(equalToConstant: 120).isActive = true
+
+        let soundRow = NSStackView(views: [soundLbl, soundPopup])
+        soundRow.orientation = .horizontal
+        soundRow.spacing = 8
+
+        chimeDefaultToggle = NSButton(checkboxWithTitle: "On by default", target: nil, action: nil)
+        chimeDefaultToggle.state = config.chimeEnabled ? .on : .off
+
+        let contentStack = NSStackView(views:
+            [sectionHeader("BUTTON DURATIONS")] + buttonRows +
+            [sectionHeader("SOUND"), soundRow, chimeDefaultToggle]
+        )
+        contentStack.orientation = .vertical
+        contentStack.spacing = 8
+        contentStack.alignment = .leading
+        contentStack.setCustomSpacing(10, after: contentStack.arrangedSubviews[0])
+        contentStack.setCustomSpacing(14, after: buttonRows.last!)
+        contentStack.setCustomSpacing(8,  after: contentStack.arrangedSubviews[5])
+        contentStack.translatesAutoresizingMaskIntoConstraints = false
+        settingsOverlay.addSubview(contentStack)
 
         let saveBtn = NSButton(title: "Save", target: self, action: #selector(saveSettings))
         saveBtn.bezelStyle = .rounded
@@ -330,13 +374,26 @@ class TimerViewController: NSViewController {
         settingsOverlay.addSubview(saveBtn)
 
         NSLayoutConstraint.activate([
-            header.topAnchor.constraint(equalTo: settingsOverlay.topAnchor, constant: 28),
-            header.centerXAnchor.constraint(equalTo: settingsOverlay.centerXAnchor),
-            rowStack.centerXAnchor.constraint(equalTo: settingsOverlay.centerXAnchor),
-            rowStack.centerYAnchor.constraint(equalTo: settingsOverlay.centerYAnchor),
-            saveBtn.topAnchor.constraint(equalTo: rowStack.bottomAnchor, constant: 20),
+            contentStack.topAnchor.constraint(equalTo: settingsOverlay.topAnchor, constant: 30),
+            contentStack.centerXAnchor.constraint(equalTo: settingsOverlay.centerXAnchor),
+            saveBtn.topAnchor.constraint(equalTo: contentStack.bottomAnchor, constant: 14),
             saveBtn.centerXAnchor.constraint(equalTo: settingsOverlay.centerXAnchor),
         ])
+    }
+
+    private func sectionHeader(_ title: String) -> NSTextField {
+        let lbl = NSTextField(labelWithString: title)
+        lbl.font = .systemFont(ofSize: 10, weight: .semibold)
+        lbl.textColor = dimText
+        return lbl
+    }
+
+    @objc private func previewSound() {
+        guard let name = soundPopup.titleOfSelectedItem else { return }
+        let url = URL(fileURLWithPath: "/System/Library/Sounds/\(name).aiff")
+        previewPlayer = try? AVAudioPlayer(contentsOf: url)
+        previewPlayer?.volume = 0.8
+        previewPlayer?.play()
     }
 
     private func makeSettingsRow(index: Int) -> NSView {
@@ -397,7 +454,11 @@ class TimerViewController: NSViewController {
             }
             newButtons.append(v)
         }
-        config = TimerConfig(buttons: newButtons)
+        config = TimerConfig(
+            buttons: newButtons,
+            soundName: soundPopup.titleOfSelectedItem ?? config.soundName,
+            chimeEnabled: chimeDefaultToggle.state == .on
+        )
         ConfigManager.shared.save(config)
         refreshSelectButtons()
         openSettings()
@@ -577,7 +638,7 @@ class TimerViewController: NSViewController {
     }
 
     private func onExpiry() {
-        if chimeOn { chime.playDoubleChime() }
+        if chimeOn { chime.playDoubleChime(sound: config.soundName) }
         startPulse()
     }
 
