@@ -1,6 +1,41 @@
 import Cocoa
 import AVFoundation
 
+// MARK: - Config
+
+struct TimerConfig: Codable {
+    var buttons: [Int]
+    static let `default` = TimerConfig(buttons: [5, 20, 30, 60])
+}
+
+final class ConfigManager {
+    static let shared = ConfigManager()
+    private init() {}
+
+    private var url: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/sprint-timer/config.json")
+    }
+
+    func load() -> TimerConfig {
+        guard let data = try? Data(contentsOf: url),
+              let cfg  = try? JSONDecoder().decode(TimerConfig.self, from: data),
+              cfg.buttons.count == 4
+        else { return .default }
+        return cfg
+    }
+
+    func save(_ cfg: TimerConfig) {
+        let dir = url.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let enc = JSONEncoder()
+        enc.outputFormatting = .prettyPrinted
+        if let data = try? enc.encode(cfg) { try? data.write(to: url) }
+    }
+}
+
+// MARK: - App entry
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
@@ -39,6 +74,11 @@ class DarkButton: NSView {
     private let hovered = NSColor(red: 0.23, green: 0.23, blue: 0.25, alpha: 1)
     private let bright  = NSColor(red: 0.95, green: 0.93, blue: 0.90, alpha: 1)
     var action: (() -> Void)?
+
+    var title: String {
+        get { label.stringValue }
+        set { label.stringValue = newValue }
+    }
 
     init(title: String) {
         super.init(frame: .zero)
@@ -90,7 +130,6 @@ class ChimePlayer {
             player.volume = 0.8
             player.play()
             self?.players.append(player)
-            // clean up after playback
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
                 self?.players.removeAll { !$0.isPlaying }
             }
@@ -113,6 +152,7 @@ class TimerViewController: NSViewController {
     private let pauseBtn     = NSButton()
     private let resetBtn     = NSButton()
     private let chimeToggle  = NSButton()
+    private let settingsBtn  = NSButton()
     private let selectStack  = NSStackView()
     private let timerStack   = NSStackView()
 
@@ -134,6 +174,10 @@ class TimerViewController: NSViewController {
     private let dimText    = NSColor(red: 0.38, green: 0.38, blue: 0.40, alpha: 1)
     private let bright     = NSColor(red: 0.95, green: 0.93, blue: 0.90, alpha: 1)
 
+    private var config       = ConfigManager.shared.load()
+    private var selBtns      : [DarkButton] = []
+    private var settingsPanel: NSPanel?
+
     override func loadView() {
         view = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 340))
         view.wantsLayer = true
@@ -145,6 +189,7 @@ class TimerViewController: NSViewController {
         buildSelectView()
         buildTimerView()
         buildChimeToggle()
+        buildSettingsButton()
 
         [titleLabel, selectStack, timerStack].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
@@ -204,32 +249,99 @@ class TimerViewController: NSViewController {
         updateChimeIcon()
     }
 
+    // MARK: - Settings button
+
+    private func buildSettingsButton() {
+        settingsBtn.translatesAutoresizingMaskIntoConstraints = false
+        settingsBtn.isBordered = false
+        settingsBtn.bezelStyle = .regularSquare
+        settingsBtn.wantsLayer = true
+        settingsBtn.layer?.backgroundColor = NSColor.clear.cgColor
+        settingsBtn.title = ""
+        settingsBtn.imagePosition = .imageOnly
+        settingsBtn.target = self
+        settingsBtn.action = #selector(openSettings)
+        settingsBtn.widthAnchor.constraint(equalToConstant: 22).isActive = true
+        settingsBtn.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        if let img = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Settings") {
+            let cfg = NSImage.SymbolConfiguration(pointSize: 11, weight: .light)
+            settingsBtn.image = img.withSymbolConfiguration(cfg)
+            settingsBtn.contentTintColor = dimText
+        }
+        settingsBtn.toolTip = "Settings"
+        view.addSubview(settingsBtn)
+        NSLayoutConstraint.activate([
+            settingsBtn.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -10),
+            settingsBtn.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
+        ])
+    }
+
+    @objc private func openSettings() {
+        let vc = SettingsViewController(config: config)
+        vc.onSave = { [weak self] newConfig in
+            guard let self else { return }
+            self.config = newConfig
+            ConfigManager.shared.save(newConfig)
+            self.refreshSelectButtons()
+            self.settingsPanel?.close()
+            self.settingsPanel = nil
+        }
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 240, height: 226),
+            styleMask: [.titled, .closable, .fullSizeContentView, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = ""
+        panel.titlebarAppearsTransparent = true
+        panel.isMovableByWindowBackground = true
+        panel.level = .floating
+        panel.backgroundColor = NSColor(red: 0.10, green: 0.10, blue: 0.11, alpha: 1)
+        panel.isReleasedWhenClosed = false
+        panel.appearance = NSAppearance(named: .darkAqua)
+        panel.contentViewController = vc
+
+        settingsPanel?.close()
+        settingsPanel = panel
+
+        if let mainFrame = view.window?.frame {
+            panel.setFrameOrigin(NSPoint(x: mainFrame.minX, y: mainFrame.minY - panel.frame.height - 8))
+        }
+        panel.makeKeyAndOrderFront(nil)
+    }
+
     // MARK: - Select grid
 
     private func buildSelectView() {
-        let pairs: [(Int, String)] = [(5,"5 MIN"),(20,"20 MIN"),(30,"30 MIN"),(60,"60 MIN")]
-        let row1 = hrow(pairs[0], pairs[1])
-        let row2 = hrow(pairs[2], pairs[3])
+        selBtns = config.buttons.map { mins in
+            let btn = DarkButton(title: "\(mins) MIN")
+            btn.translatesAutoresizingMaskIntoConstraints = false
+            btn.widthAnchor.constraint(equalToConstant: 118).isActive = true
+            btn.heightAnchor.constraint(equalToConstant: 60).isActive = true
+            btn.action = { [weak self] in self?.startTimer(mins) }
+            return btn
+        }
+        let row1 = hrow(selBtns[0], selBtns[1])
+        let row2 = hrow(selBtns[2], selBtns[3])
         selectStack.orientation = .vertical
         selectStack.spacing = 10
         selectStack.addArrangedSubview(row1)
         selectStack.addArrangedSubview(row2)
     }
 
-    private func hrow(_ a: (Int,String), _ b: (Int,String)) -> NSStackView {
-        let s = NSStackView(views: [makeSelBtn(a.0, a.1), makeSelBtn(b.0, b.1)])
+    private func hrow(_ a: NSView, _ b: NSView) -> NSStackView {
+        let s = NSStackView(views: [a, b])
         s.orientation = .horizontal
         s.spacing = 10
         return s
     }
 
-    private func makeSelBtn(_ mins: Int, _ label: String) -> NSView {
-        let btn = DarkButton(title: label)
-        btn.translatesAutoresizingMaskIntoConstraints = false
-        btn.widthAnchor.constraint(equalToConstant: 118).isActive = true
-        btn.heightAnchor.constraint(equalToConstant: 60).isActive = true
-        btn.action = { [weak self] in self?.startTimer(mins) }
-        return btn
+    private func refreshSelectButtons() {
+        for (i, btn) in selBtns.enumerated() {
+            let mins = config.buttons[i]
+            btn.title = "\(mins) MIN"
+            btn.action = { [weak self] in self?.startTimer(mins) }
+        }
     }
 
     // MARK: - Timer view
@@ -455,5 +567,101 @@ class RingView: NSView {
             }
             path.stroke()
         }
+    }
+}
+
+// MARK: - Settings panel
+
+class SettingsViewController: NSViewController {
+    var onSave: ((TimerConfig) -> Void)?
+
+    private var config: TimerConfig
+    private var fields: [NSTextField] = []
+
+    private let bg      = NSColor(red: 0.10, green: 0.10, blue: 0.11, alpha: 1)
+    private let dimText = NSColor(red: 0.38, green: 0.38, blue: 0.40, alpha: 1)
+    private let bright  = NSColor(red: 0.95, green: 0.93, blue: 0.90, alpha: 1)
+
+    init(config: TimerConfig) {
+        self.config = config
+        super.init(nibName: nil, bundle: nil)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func loadView() {
+        view = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 226))
+        view.wantsLayer = true
+        view.layer?.backgroundColor = bg.cgColor
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+
+        let header = NSTextField(labelWithString: "BUTTON DURATIONS")
+        header.font = .systemFont(ofSize: 10, weight: .semibold)
+        header.textColor = dimText
+        header.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(header)
+
+        let rowViews = (0..<4).map { makeRow(index: $0) }
+
+        let rowStack = NSStackView(views: rowViews)
+        rowStack.orientation = .vertical
+        rowStack.spacing = 10
+        rowStack.alignment = .leading
+        rowStack.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(rowStack)
+
+        let saveBtn = NSButton(title: "Save", target: self, action: #selector(save))
+        saveBtn.bezelStyle = .rounded
+        saveBtn.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(saveBtn)
+
+        NSLayoutConstraint.activate([
+            header.topAnchor.constraint(equalTo: view.topAnchor, constant: 28),
+            header.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+
+            rowStack.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 14),
+            rowStack.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+
+            saveBtn.topAnchor.constraint(equalTo: rowStack.bottomAnchor, constant: 16),
+            saveBtn.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+        ])
+    }
+
+    private func makeRow(index: Int) -> NSView {
+        let lbl = NSTextField(labelWithString: "Button \(index + 1)")
+        lbl.font = .systemFont(ofSize: 13)
+        lbl.textColor = bright
+        lbl.widthAnchor.constraint(equalToConstant: 64).isActive = true
+
+        let field = NSTextField()
+        field.stringValue = "\(config.buttons[index])"
+        field.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        field.alignment = .center
+        field.widthAnchor.constraint(equalToConstant: 48).isActive = true
+        fields.append(field)
+
+        let unit = NSTextField(labelWithString: "min")
+        unit.font = .systemFont(ofSize: 13)
+        unit.textColor = dimText
+
+        let row = NSStackView(views: [lbl, field, unit])
+        row.orientation = .horizontal
+        row.spacing = 8
+        row.alignment = .centerY
+        return row
+    }
+
+    @objc private func save() {
+        var newButtons: [Int] = []
+        for field in fields {
+            guard let v = Int(field.stringValue.trimmingCharacters(in: .whitespaces)), v > 0 else {
+                NSSound.beep()
+                return
+            }
+            newButtons.append(v)
+        }
+        onSave?(TimerConfig(buttons: newButtons))
     }
 }
