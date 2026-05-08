@@ -105,15 +105,35 @@ class DarkButton: NSView {
         set { label.stringValue = newValue }
     }
 
+    var minutes: Int = 0 { didSet { needsDisplay = true } }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let fraction = min(Double(minutes), 60.0) / 60.0
+        guard fraction > 0 else { return }
+        NSColor(red: 0.13, green: 0.13, blue: 0.15, alpha: 1).setFill()
+        if fraction >= 1.0 {
+            NSBezierPath(ovalIn: bounds).fill()
+        } else {
+            let c = CGPoint(x: bounds.midX, y: bounds.midY)
+            let r = min(bounds.width, bounds.height) / 2
+            let pie = NSBezierPath()
+            pie.move(to: c)
+            pie.appendArc(withCenter: c, radius: r,
+                          startAngle: 90, endAngle: CGFloat(90 - fraction * 360),
+                          clockwise: true)
+            pie.close()
+            pie.fill()
+        }
+    }
+
     init(title: String) {
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = surface.cgColor
-        layer?.cornerRadius = 10
         layer?.borderWidth = 0.5
         layer?.borderColor = NSColor.white.withAlphaComponent(0.09).cgColor
         label.stringValue = title
-        label.font = .systemFont(ofSize: 15, weight: .semibold)
+        label.font = .systemFont(ofSize: 24, weight: .semibold)
         label.textColor = bright
         label.alignment = .center
         label.translatesAutoresizingMaskIntoConstraints = false
@@ -125,6 +145,11 @@ class DarkButton: NSView {
         addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(tapped)))
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        layer?.cornerRadius = min(bounds.width, bounds.height) / 2
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -474,10 +499,11 @@ class TimerViewController: NSViewController {
 
     private func buildSelectView() {
         selBtns = config.buttons.map { mins in
-            let btn = DarkButton(title: "\(mins) MIN")
+            let btn = DarkButton(title: "\(mins)")
+            btn.minutes = mins
             btn.translatesAutoresizingMaskIntoConstraints = false
-            btn.widthAnchor.constraint(equalToConstant: 118).isActive = true
-            btn.heightAnchor.constraint(equalToConstant: 60).isActive = true
+            btn.widthAnchor.constraint(equalToConstant: 100).isActive = true
+            btn.heightAnchor.constraint(equalToConstant: 100).isActive = true
             btn.action = { [weak self] in self?.startTimer(mins) }
             return btn
         }
@@ -499,7 +525,8 @@ class TimerViewController: NSViewController {
     private func refreshSelectButtons() {
         for (i, btn) in selBtns.enumerated() {
             let mins = config.buttons[i]
-            btn.title = "\(mins) MIN"
+            btn.title = "\(mins)"
+            btn.minutes = mins
             btn.action = { [weak self] in self?.startTimer(mins) }
         }
     }
