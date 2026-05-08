@@ -6,7 +6,13 @@ import Carbon
 
 struct HotkeyDef: Codable, Equatable {
     var keyCode: UInt32
-    var modifiers: UInt32  // Carbon modifier flags
+    var modifiers: UInt32
+}
+
+struct ScheduleRange: Codable {
+    var name: String
+    var startMinutes: Int   // 0–1439
+    var endMinutes: Int     // 0–1439; if < startMinutes the range crosses midnight
 }
 
 struct TimerConfig: Codable {
@@ -15,22 +21,37 @@ struct TimerConfig: Codable {
     var chimeEnabled: Bool
     var showCustomInput: Bool
     var hotkeys: [HotkeyDef?]
+    var schedules: [ScheduleRange]
+    var schedulesEnabled: Bool
 
     static let `default` = TimerConfig(
         buttons: [5, 20, 30, 60],
         soundName: "Glass",
         chimeEnabled: true,
         showCustomInput: false,
-        hotkeys: Array(repeating: nil, count: 6)
+        hotkeys: Array(repeating: nil, count: 6),
+        schedules: [
+            ScheduleRange(name: "Day",  startMinutes: 0,   endMinutes: 1439),
+            ScheduleRange(name: "Work", startMinutes: 600, endMinutes: 1080),
+        ],
+        schedulesEnabled: true
     )
 
     init(buttons: [Int], soundName: String = "Glass", chimeEnabled: Bool = true,
-         showCustomInput: Bool = false, hotkeys: [HotkeyDef?] = Array(repeating: nil, count: 6)) {
-        self.buttons        = buttons
-        self.soundName      = soundName
-        self.chimeEnabled   = chimeEnabled
-        self.showCustomInput = showCustomInput
-        self.hotkeys        = hotkeys
+         showCustomInput: Bool = false,
+         hotkeys: [HotkeyDef?] = Array(repeating: nil, count: 6),
+         schedules: [ScheduleRange] = [
+             ScheduleRange(name: "Day",  startMinutes: 0,   endMinutes: 1439),
+             ScheduleRange(name: "Work", startMinutes: 600, endMinutes: 1080),
+         ],
+         schedulesEnabled: Bool = true) {
+        self.buttons          = buttons
+        self.soundName        = soundName
+        self.chimeEnabled     = chimeEnabled
+        self.showCustomInput  = showCustomInput
+        self.hotkeys          = hotkeys
+        self.schedules        = schedules
+        self.schedulesEnabled = schedulesEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -42,7 +63,12 @@ struct TimerConfig: Codable {
         let decoded     = (try? c.decode([HotkeyDef?].self, forKey: .hotkeys))    ?? []
         var hk: [HotkeyDef?] = Array(repeating: nil, count: 6)
         for (i, v) in decoded.prefix(6).enumerated() { hk[i] = v }
-        hotkeys = hk
+        hotkeys   = hk
+        schedules = (try? c.decode([ScheduleRange].self, forKey: .schedules)) ?? [
+            ScheduleRange(name: "Day",  startMinutes: 0,   endMinutes: 1439),
+            ScheduleRange(name: "Work", startMinutes: 600, endMinutes: 1080),
+        ]
+        schedulesEnabled = (try? c.decode(Bool.self, forKey: .schedulesEnabled)) ?? true
     }
 }
 
@@ -145,7 +171,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         app.setActivationPolicy(.accessory)
-        let rect = NSRect(x: 0, y: 0, width: 300, height: 340)
+        let rect = NSRect(x: 0, y: 0, width: 300, height: 360)
         window = SprintPanel(
             contentRect: rect,
             styleMask: [.titled, .closable, .fullSizeContentView, .nonactivatingPanel],
@@ -164,6 +190,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if !window.setFrameUsingName("SprintTimerMainWindow") {
             window.center()
         }
+        // Enforce current content size regardless of any stale saved frame
+        window.setContentSize(NSSize(width: 300, height: 360))
         window.contentViewController = TimerViewController()
         window.makeKeyAndOrderFront(nil)
     }
@@ -317,13 +345,19 @@ class TimerViewController: NSViewController {
     private var customTimerView     : CustomTimerView!
     private var customInputToggle   : NSButton!
     private var hotkeyFields        : [HotkeyField] = []
+    private var scheduleBarsView          : ScheduleBarsView!
+    private var schedBarsHeightConstraint : NSLayoutConstraint!
+    private var scheduleRefreshTimer      : Timer?
+    private var scheduleRowStack      : NSStackView!
+    private var scheduleRowFields     : [(name: NSTextField, start: NSTextField, end: NSTextField)] = []
+    private var schedulesEnabledToggle: NSButton!
 
     private let systemSounds = ["Basso", "Blow", "Bottle", "Frog", "Funk", "Glass",
                                  "Hero", "Morse", "Ping", "Pop", "Purr", "Sosumi",
                                  "Submarine", "Tink"]
 
     override func loadView() {
-        view = ContentView(frame: NSRect(x: 0, y: 0, width: 300, height: 340))
+        view = ContentView(frame: NSRect(x: 0, y: 0, width: 300, height: 360))
         view.wantsLayer = true
         view.layer?.backgroundColor = bg.cgColor
     }
@@ -337,6 +371,7 @@ class TimerViewController: NSViewController {
         super.viewDidLoad()
         buildSelectView()
         buildTimerView()
+        buildScheduleBarsView()   // must come before controls so they can pin to its top
         buildChimeToggle()
         buildSettingsButton()
         buildSettingsOverlay()
@@ -354,9 +389,9 @@ class TimerViewController: NSViewController {
             titleLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 22),
             titleLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             selectStack.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            selectStack.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            selectStack.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: -10),
             timerStack.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            timerStack.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: 10),
+            timerStack.centerYAnchor.constraint(equalTo: view.centerYAnchor),
         ])
 
         // overlay above main content; controls always on top of overlay
@@ -366,6 +401,28 @@ class TimerViewController: NSViewController {
 
         showSelect()
         registerHotkeys()
+
+        scheduleRefreshTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            self?.scheduleBarsView.refresh()
+        }
+    }
+
+    // MARK: - Schedule bars
+
+    private func buildScheduleBarsView() {
+        scheduleBarsView = ScheduleBarsView()
+        scheduleBarsView.schedules = config.schedules
+        scheduleBarsView.isHidden = !config.schedulesEnabled
+        scheduleBarsView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(scheduleBarsView)
+        let hc = scheduleBarsView.heightAnchor.constraint(equalToConstant: config.schedulesEnabled ? 20 : 0)
+        schedBarsHeightConstraint = hc
+        NSLayoutConstraint.activate([
+            scheduleBarsView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            scheduleBarsView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            scheduleBarsView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            hc,
+        ])
     }
 
     // MARK: - Hotkeys
@@ -404,7 +461,7 @@ class TimerViewController: NSViewController {
         chimeToggle.heightAnchor.constraint(equalToConstant: 22).isActive = true
         view.addSubview(chimeToggle)
         NSLayoutConstraint.activate([
-            chimeToggle.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -10),
+            chimeToggle.bottomAnchor.constraint(equalTo: scheduleBarsView.topAnchor, constant: -4),
             chimeToggle.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
         ])
         updateChimeIcon()
@@ -447,7 +504,7 @@ class TimerViewController: NSViewController {
         settingsBtn.toolTip = "Settings"
         view.addSubview(settingsBtn)
         NSLayoutConstraint.activate([
-            settingsBtn.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -10),
+            settingsBtn.bottomAnchor.constraint(equalTo: scheduleBarsView.topAnchor, constant: -4),
             settingsBtn.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
         ])
     }
@@ -468,13 +525,13 @@ class TimerViewController: NSViewController {
             settingsOverlay.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
 
-        // Save button pinned to bottom
+        // Save button pinned to bottom (above the bars area)
         let saveBtn = NSButton(title: "Save", target: self, action: #selector(saveSettings))
         saveBtn.bezelStyle = .rounded
         saveBtn.translatesAutoresizingMaskIntoConstraints = false
         settingsOverlay.addSubview(saveBtn)
         NSLayoutConstraint.activate([
-            saveBtn.bottomAnchor.constraint(equalTo: settingsOverlay.bottomAnchor, constant: -14),
+            saveBtn.bottomAnchor.constraint(equalTo: settingsOverlay.bottomAnchor, constant: -28),
             saveBtn.centerXAnchor.constraint(equalTo: settingsOverlay.centerXAnchor),
         ])
 
@@ -532,23 +589,37 @@ class TimerViewController: NSViewController {
             hotkeyFields.append(field)
             return makeHotkeyRow(label: lbl, field: field)
         }
-
-        // Cancel any other recording field when one starts
         for field in hotkeyFields {
             field.onStartRecording = { [weak self, weak field] in
                 self?.hotkeyFields.forEach { f in if f !== field { f.cancelRecording() } }
             }
         }
 
-        let durHeader = sectionHeader("BUTTON DURATIONS")
-        let sndHeader = sectionHeader("SOUND")
-        let hkHeader  = sectionHeader("HOTKEYS")
+        // Schedules section
+        schedulesEnabledToggle = NSButton(checkboxWithTitle: "Show schedule bars",
+                                          target: self, action: #selector(schedulesEnabledChanged))
+        schedulesEnabledToggle.state = config.schedulesEnabled ? .on : .off
 
-        let contentStack = NSStackView(views:
-            [durHeader] + buttonRows +
-            [sndHeader, soundRow, chimeDefaultToggle, customInputToggle,
-             hkHeader] + hotkeyRows
-        )
+        scheduleRowStack = NSStackView()
+        scheduleRowStack.orientation = .vertical
+        scheduleRowStack.spacing = 6
+        scheduleRowStack.alignment = .leading
+
+        let addSchedBtn = NSButton(title: "+ Add", target: self, action: #selector(addScheduleRowEmpty))
+        addSchedBtn.bezelStyle = .inline
+        addSchedBtn.font = .systemFont(ofSize: 11)
+
+        let durHeader  = sectionHeader("BUTTON DURATIONS")
+        let sndHeader  = sectionHeader("SOUND")
+        let hkHeader   = sectionHeader("HOTKEYS")
+        let schHeader  = sectionHeader("SCHEDULES")
+
+        var allViews: [NSView] = [durHeader]
+        allViews += buttonRows
+        allViews += [sndHeader, soundRow, chimeDefaultToggle, customInputToggle, hkHeader]
+        allViews += hotkeyRows
+        allViews += [schHeader, schedulesEnabledToggle, scheduleRowStack, addSchedBtn]
+        let contentStack = NSStackView(views: allViews)
         contentStack.orientation = .vertical
         contentStack.spacing = 6
         contentStack.alignment = .leading
@@ -558,6 +629,10 @@ class TimerViewController: NSViewController {
         contentStack.setCustomSpacing(10, after: chimeDefaultToggle)
         contentStack.setCustomSpacing(10, after: customInputToggle)
         contentStack.setCustomSpacing(8,  after: hkHeader)
+        contentStack.setCustomSpacing(10, after: hotkeyRows.last!)
+        contentStack.setCustomSpacing(6,  after: schHeader)
+        contentStack.setCustomSpacing(8,  after: schedulesEnabledToggle)
+        contentStack.setCustomSpacing(8,  after: scheduleRowStack)
         contentStack.translatesAutoresizingMaskIntoConstraints = false
         docView.addSubview(contentStack)
 
@@ -591,6 +666,90 @@ class TimerViewController: NSViewController {
         row.spacing = 8
         row.alignment = .centerY
         return row
+    }
+
+    // MARK: - Schedule row management
+
+    private func populateScheduleRows() {
+        scheduleRowStack.arrangedSubviews.forEach {
+            scheduleRowStack.removeArrangedSubview($0)
+            $0.removeFromSuperview()
+        }
+        scheduleRowFields = []
+        for sched in config.schedules {
+            insertScheduleRow(name: sched.name,
+                              startMinutes: sched.startMinutes,
+                              endMinutes: sched.endMinutes)
+        }
+    }
+
+    @objc private func addScheduleRowEmpty() {
+        insertScheduleRow(name: "", startMinutes: 540, endMinutes: 1020)
+    }
+
+    private func insertScheduleRow(name: String, startMinutes: Int, endMinutes: Int) {
+        let nameField = NSTextField()
+        nameField.stringValue = name
+        nameField.font = .systemFont(ofSize: 12)
+        nameField.widthAnchor.constraint(equalToConstant: 78).isActive = true
+
+        let startField = NSTextField()
+        startField.stringValue = hhmm(startMinutes)
+        startField.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        startField.alignment = .center
+        startField.widthAnchor.constraint(equalToConstant: 52).isActive = true
+
+        let sep = NSTextField(labelWithString: "–")
+        sep.textColor = dimText
+        sep.font = .systemFont(ofSize: 12)
+
+        let endField = NSTextField()
+        endField.stringValue = hhmm(endMinutes)
+        endField.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        endField.alignment = .center
+        endField.widthAnchor.constraint(equalToConstant: 52).isActive = true
+
+        let removeBtn = NSButton(title: "×", target: self, action: #selector(removeScheduleRow(_:)))
+        removeBtn.isBordered = false
+        removeBtn.font = .systemFont(ofSize: 13, weight: .light)
+        removeBtn.contentTintColor = dimText
+
+        let row = NSStackView(views: [nameField, startField, sep, endField, removeBtn])
+        row.orientation = .horizontal
+        row.spacing = 6
+        row.alignment = .centerY
+
+        scheduleRowStack.addArrangedSubview(row)
+        scheduleRowFields.append((name: nameField, start: startField, end: endField))
+    }
+
+    @objc private func removeScheduleRow(_ sender: NSButton) {
+        guard let row = sender.superview,
+              let idx = scheduleRowStack.arrangedSubviews.firstIndex(where: { $0 === row })
+        else { return }
+        scheduleRowStack.removeArrangedSubview(row)
+        row.removeFromSuperview()
+        scheduleRowFields.remove(at: idx)
+    }
+
+    private func hhmm(_ minutes: Int) -> String {
+        String(format: "%02d:%02d", minutes / 60, minutes % 60)
+    }
+
+    private func parseHHMM(_ s: String) -> Int? {
+        let t = s.trimmingCharacters(in: .whitespaces)
+        let p = t.split(separator: ":")
+        guard p.count == 2,
+              let h = Int(p[0]), h >= 0, h <= 23,
+              let m = Int(p[1]), m >= 0, m <= 59 else { return nil }
+        return h * 60 + m
+    }
+
+    @objc private func schedulesEnabledChanged() {
+        let enabled = schedulesEnabledToggle.state == .on
+        scheduleBarsView.isHidden = !enabled
+        schedBarsHeightConstraint.constant = enabled ? 20 : 0
+        view.window?.setContentSize(NSSize(width: 300, height: enabled ? 360 : 340))
     }
 
     @objc private func chimeDefaultChanged() {
@@ -637,11 +796,13 @@ class TimerViewController: NSViewController {
     @objc private func openSettings() {
         let opening = settingsOverlay.isHidden
         if opening {
-            HotkeyManager.shared.registerAll([])  // free up all combos while editing
+            HotkeyManager.shared.registerAll([])
             for (i, f) in settingsFields.enumerated() { f.stringValue = "\(config.buttons[i])" }
             chimeDefaultToggle.state = chimeOn ? .on : .off
             customInputToggle.state  = config.showCustomInput ? .on : .off
             for (i, hf) in hotkeyFields.enumerated() { hf.hotkeyDef = config.hotkeys[i] }
+            schedulesEnabledToggle.state = config.schedulesEnabled ? .on : .off
+            populateScheduleRows()
             settingsOverlay.isHidden = false
             escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 if event.keyCode == 53 { self?.openSettings(); return nil }
@@ -650,7 +811,7 @@ class TimerViewController: NSViewController {
         } else {
             hotkeyFields.forEach { $0.cancelRecording() }
             if let m = escMonitor { NSEvent.removeMonitor(m); escMonitor = nil }
-            registerHotkeys()  // restore (saved or unchanged) hotkeys
+            registerHotkeys()
         }
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.15
@@ -669,20 +830,34 @@ class TimerViewController: NSViewController {
         var newButtons: [Int] = []
         for field in settingsFields {
             guard let v = Int(field.stringValue.trimmingCharacters(in: .whitespaces)), v > 0 else {
-                NSSound.beep()
-                return
+                NSSound.beep(); return
             }
             newButtons.append(v)
         }
+
+        var newSchedules: [ScheduleRange] = []
+        for row in scheduleRowFields {
+            let name = row.name.stringValue.trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty,
+                  let start = parseHHMM(row.start.stringValue),
+                  let end   = parseHHMM(row.end.stringValue) else {
+                NSSound.beep(); return
+            }
+            newSchedules.append(ScheduleRange(name: name, startMinutes: start, endMinutes: end))
+        }
+
         config = TimerConfig(
             buttons: newButtons,
             soundName: soundPopup.titleOfSelectedItem ?? config.soundName,
             chimeEnabled: chimeDefaultToggle.state == .on,
             showCustomInput: customInputToggle.state == .on,
-            hotkeys: hotkeyFields.map { $0.hotkeyDef }
+            hotkeys: hotkeyFields.map { $0.hotkeyDef },
+            schedules: newSchedules,
+            schedulesEnabled: schedulesEnabledToggle.state == .on
         )
         ConfigManager.shared.save(config)
         refreshSelectButtons()
+        scheduleBarsView.schedules = config.schedules
         registerHotkeys()
         openSettings()
     }
@@ -1039,6 +1214,94 @@ private class FlippedView: NSView {
     override var isFlipped: Bool { true }
 }
 
+// MARK: - Schedule progress bars
+
+class ScheduleBarsView: NSView {
+    var schedules: [ScheduleRange] = [] {
+        didSet { needsDisplay = true; updateTrackingAreas() }
+    }
+
+    override var isFlipped: Bool { true }
+
+    private let gap: CGFloat = 2
+    private let vPad: CGFloat = 2
+    private let red = NSColor(red: 0.85, green: 0.18, blue: 0.18, alpha: 1)
+    private let fillAlphas: [CGFloat] = [0.55, 0.45, 0.38, 0.30, 0.25]
+
+    func refresh() { needsDisplay = true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard !schedules.isEmpty else { return }
+        let n      = CGFloat(schedules.count)
+        let usable = bounds.height - 2 * vPad
+        let barH   = max(2, floor((usable - gap * (n - 1)) / n))
+        let now    = currentMinutes()
+
+        for (i, sched) in schedules.enumerated() {
+            let y         = vPad + CGFloat(i) * (barH + gap)
+            let trackRect = NSRect(x: 0, y: y, width: bounds.width, height: barH)
+
+            NSColor(white: 1, alpha: 0.08).setFill()
+            trackRect.fill()
+
+            let prog = scheduleProgress(sched, at: now)
+            if prog > 0 {
+                let alpha = i < fillAlphas.count ? fillAlphas[i] : 0.25
+                red.withAlphaComponent(alpha).setFill()
+                NSRect(x: 0, y: y, width: bounds.width * CGFloat(prog), height: barH).fill()
+            }
+        }
+    }
+
+    private func currentMinutes() -> Int {
+        let c = Calendar.current, now = Date()
+        return c.component(.hour, from: now) * 60 + c.component(.minute, from: now)
+    }
+
+    private func scheduleProgress(_ s: ScheduleRange, at mins: Int) -> Double {
+        let start = s.startMinutes, end = s.endMinutes
+        if start == end { return 0 }
+        if start < end {
+            guard mins >= start && mins <= end else { return 0 }
+            return Double(mins - start) / Double(end - start)
+        } else {
+            // Crosses midnight
+            let dur = 1440 - start + end
+            if mins >= start      { return Double(mins - start) / Double(dur) }
+            if mins <= end        { return Double(1440 - start + mins) / Double(dur) }
+            return 0
+        }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach { removeTrackingArea($0) }
+        guard !schedules.isEmpty else { return }
+        let n      = CGFloat(schedules.count)
+        let usable = bounds.height - 2 * vPad
+        let barH   = max(2, floor((usable - gap * (n - 1)) / n))
+        for (i, _) in schedules.enumerated() {
+            let y    = vPad + CGFloat(i) * (barH + gap)
+            let rect = NSRect(x: 0, y: y, width: bounds.width, height: barH + gap)
+            addTrackingArea(NSTrackingArea(rect: rect,
+                                           options: [.mouseEnteredAndExited, .activeAlways],
+                                           owner: self,
+                                           userInfo: ["i": i]))
+        }
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        guard let idx = event.trackingArea?.userInfo?["i"] as? Int,
+              idx < schedules.count else { return }
+        let s    = schedules[idx]
+        let prog = scheduleProgress(s, at: currentMinutes())
+        toolTip  = "\(s.name)  \(fmt(s.startMinutes))–\(fmt(s.endMinutes))  \(Int(prog * 100))%"
+    }
+    override func mouseExited(with event: NSEvent) { toolTip = nil }
+
+    private func fmt(_ m: Int) -> String { String(format: "%02d:%02d", m / 60, m % 60) }
+}
+
 // MARK: - Hotkey recorder field
 
 class HotkeyField: NSView {
@@ -1058,7 +1321,6 @@ class HotkeyField: NSView {
     private let bright        = NSColor(red: 0.95, green: 0.93, blue: 0.90, alpha: 1)
     private let accentBorder  = NSColor(red: 0.30, green: 0.50, blue: 0.85, alpha: 1)
 
-    // Modifier key codes — ignore these as standalone keypresses
     private let modifierCodes: Set<UInt32> = [54, 55, 56, 57, 58, 59, 60, 61, 62, 63]
 
     init(def: HotkeyDef? = nil) {
@@ -1129,7 +1391,7 @@ class HotkeyField: NSView {
         update()
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.handleKey(event)
-            return nil  // consume all keys while recording
+            return nil
         }
         mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
             guard let self = self, self.recording else { return event }
@@ -1153,17 +1415,9 @@ class HotkeyField: NSView {
 
     private func handleKey(_ event: NSEvent) {
         let keyCode = UInt32(event.keyCode)
-
-        // Ignore bare modifier keypresses
         if modifierCodes.contains(keyCode) { return }
+        if keyCode == 53 { stopRecording(); return }
 
-        // ESC cancels recording without changing the hotkey
-        if keyCode == 53 {
-            stopRecording()
-            return
-        }
-
-        // Delete/Backspace with no modifier clears the hotkey
         let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
         if keyCode == 51 && flags.isEmpty {
             hotkeyDef = nil
@@ -1171,18 +1425,14 @@ class HotkeyField: NSView {
             return
         }
 
-        // Require at least Cmd, Opt, or Ctrl (shift-only combos are too collision-prone)
-        let significant = event.modifierFlags.intersection([.command, .option, .control])
-        guard !significant.isEmpty else { return }
+        guard !event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return }
 
         hotkeyDef = HotkeyDef(keyCode: keyCode,
                                modifiers: carbonMods(from: event.modifierFlags))
         stopRecording()
     }
 
-    @objc private func clear() {
-        hotkeyDef = nil
-    }
+    @objc private func clear() { hotkeyDef = nil }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -1219,7 +1469,7 @@ class HotkeyField: NSView {
             30:"]", 31:"O", 32:"U", 33:"[", 34:"I", 35:"P", 36:"↩",
             37:"L", 38:"J", 39:"'", 40:"K", 41:";", 42:"\\", 43:",",
             44:"/", 45:"N", 46:"M", 47:".", 48:"⇥", 49:"Spc", 50:"`",
-            51:"⌫", 96:"F5", 97:"F6", 98:"F7", 99:"F3", 100:"F8",
+            51:"⌫", 65:"Num.", 96:"F5", 97:"F6", 98:"F7", 99:"F3", 100:"F8",
             101:"F9", 103:"F11", 109:"F10", 111:"F12", 118:"F4",
             120:"F2", 122:"F1", 123:"←", 124:"→", 125:"↓", 126:"↑"
         ]
