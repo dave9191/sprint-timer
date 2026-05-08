@@ -1326,7 +1326,7 @@ class ScheduleBarsView: NSView {
         let n      = CGFloat(schedules.count)
         let usable = bounds.height - 2 * vPad
         let barH   = max(2, floor((usable - gap * (n - 1)) / n))
-        for (i, _) in schedules.enumerated() {
+        for i in 0 ..< schedules.count {
             let y    = vPad + CGFloat(i) * (barH + gap)
             let rect = NSRect(x: 0, y: y, width: bounds.width, height: barH + gap)
             addTrackingArea(NSTrackingArea(rect: rect,
@@ -1341,11 +1341,72 @@ class ScheduleBarsView: NSView {
               idx < schedules.count else { return }
         let s    = schedules[idx]
         let prog = scheduleProgress(s, at: currentMinutes())
-        toolTip  = "\(s.name)  \(fmt(s.startMinutes))–\(fmt(s.endMinutes))  \(Int(prog * 100))%"
+        let pct: String
+        if prog <= 0      { pct = "not started" }
+        else if prog >= 1 { pct = "complete" }
+        else              { pct = "\(Int(prog * 100))%" }
+        ScheduleBarsView.tip.show(
+            "\(s.name)   \(fmt(s.startMinutes)) – \(fmt(s.endMinutes))   \(pct)",
+            near: NSEvent.mouseLocation)
     }
-    override func mouseExited(with event: NSEvent) { toolTip = nil }
+
+    override func mouseExited(with event: NSEvent) {
+        ScheduleBarsView.tip.hide()
+    }
+
+    private static let tip = BarTooltip()
 
     private func fmt(_ m: Int) -> String { String(format: "%02d:%02d", m / 60, m % 60) }
+}
+
+// MARK: - Instant bar tooltip
+
+private class BarTooltip: NSPanel {
+    private let label = NSTextField(labelWithString: "")
+
+    init() {
+        super.init(contentRect: .zero,
+                   styleMask: [.borderless, .nonactivatingPanel],
+                   backing: .buffered,
+                   defer: false)
+        isOpaque          = false
+        backgroundColor   = .clear
+        isMovable         = false
+        level             = .floating
+        ignoresMouseEvents = true
+
+        let bg = NSView()
+        bg.wantsLayer = true
+        bg.layer?.backgroundColor = NSColor(white: 0.10, alpha: 0.88).cgColor
+        bg.layer?.cornerRadius    = 5
+        contentView = bg
+
+        label.font          = .systemFont(ofSize: 11)
+        label.textColor     = NSColor(white: 0.92, alpha: 1)
+        label.isEditable    = false
+        label.isBordered    = false
+        label.drawsBackground = false
+        label.translatesAutoresizingMaskIntoConstraints = false
+        bg.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.topAnchor.constraint(equalTo: bg.topAnchor, constant: 4),
+            label.bottomAnchor.constraint(equalTo: bg.bottomAnchor, constant: -4),
+            label.leadingAnchor.constraint(equalTo: bg.leadingAnchor, constant: 8),
+            label.trailingAnchor.constraint(equalTo: bg.trailingAnchor, constant: -8),
+        ])
+    }
+
+    func show(_ text: String, near cursor: NSPoint) {
+        label.stringValue = text
+        let attrs: [NSAttributedString.Key: Any] = [.font: label.font!]
+        let sz = (text as NSString).size(withAttributes: attrs)
+        let w  = ceil(sz.width)  + 16
+        let h  = ceil(sz.height) + 8
+        setFrame(NSRect(x: cursor.x + 10, y: cursor.y + 10, width: w, height: h), display: true)
+        orderFront(nil)
+    }
+
+    func hide() { orderOut(nil) }
 }
 
 // MARK: - Hotkey recorder field
