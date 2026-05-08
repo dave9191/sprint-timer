@@ -174,9 +174,10 @@ class TimerViewController: NSViewController {
     private let dimText    = NSColor(red: 0.38, green: 0.38, blue: 0.40, alpha: 1)
     private let bright     = NSColor(red: 0.95, green: 0.93, blue: 0.90, alpha: 1)
 
-    private var config       = ConfigManager.shared.load()
-    private var selBtns      : [DarkButton] = []
-    private var settingsPanel: NSPanel?
+    private var config         = ConfigManager.shared.load()
+    private var selBtns        : [DarkButton] = []
+    private var settingsOverlay: NSView!
+    private var settingsFields : [NSTextField] = []
 
     override func loadView() {
         view = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 340))
@@ -190,6 +191,7 @@ class TimerViewController: NSViewController {
         buildTimerView()
         buildChimeToggle()
         buildSettingsButton()
+        buildSettingsOverlay()
 
         [titleLabel, selectStack, timerStack].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
@@ -208,6 +210,11 @@ class TimerViewController: NSViewController {
             timerStack.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             timerStack.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: 10),
         ])
+
+        // overlay above main content; controls always on top of overlay
+        view.addSubview(settingsOverlay)
+        view.addSubview(chimeToggle)
+        view.addSubview(settingsBtn)
 
         showSelect()
     }
@@ -276,38 +283,104 @@ class TimerViewController: NSViewController {
         ])
     }
 
+    private func buildSettingsOverlay() {
+        settingsOverlay = NSView()
+        settingsOverlay.wantsLayer = true
+        settingsOverlay.layer?.backgroundColor = bg.cgColor
+        settingsOverlay.appearance = NSAppearance(named: .darkAqua)
+        settingsOverlay.alphaValue = 0
+        settingsOverlay.isHidden = true
+        settingsOverlay.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(settingsOverlay)
+        NSLayoutConstraint.activate([
+            settingsOverlay.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            settingsOverlay.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            settingsOverlay.topAnchor.constraint(equalTo: view.topAnchor),
+            settingsOverlay.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+
+        let header = NSTextField(labelWithString: "BUTTON DURATIONS")
+        header.font = .systemFont(ofSize: 10, weight: .semibold)
+        header.textColor = dimText
+        header.translatesAutoresizingMaskIntoConstraints = false
+        settingsOverlay.addSubview(header)
+
+        settingsFields = []
+        let rowViews = (0..<4).map { makeSettingsRow(index: $0) }
+        let rowStack = NSStackView(views: rowViews)
+        rowStack.orientation = .vertical
+        rowStack.spacing = 10
+        rowStack.alignment = .leading
+        rowStack.translatesAutoresizingMaskIntoConstraints = false
+        settingsOverlay.addSubview(rowStack)
+
+        let saveBtn = NSButton(title: "Save", target: self, action: #selector(saveSettings))
+        saveBtn.bezelStyle = .rounded
+        saveBtn.translatesAutoresizingMaskIntoConstraints = false
+        settingsOverlay.addSubview(saveBtn)
+
+        NSLayoutConstraint.activate([
+            header.topAnchor.constraint(equalTo: settingsOverlay.topAnchor, constant: 28),
+            header.centerXAnchor.constraint(equalTo: settingsOverlay.centerXAnchor),
+            rowStack.centerXAnchor.constraint(equalTo: settingsOverlay.centerXAnchor),
+            rowStack.centerYAnchor.constraint(equalTo: settingsOverlay.centerYAnchor),
+            saveBtn.topAnchor.constraint(equalTo: rowStack.bottomAnchor, constant: 20),
+            saveBtn.centerXAnchor.constraint(equalTo: settingsOverlay.centerXAnchor),
+        ])
+    }
+
+    private func makeSettingsRow(index: Int) -> NSView {
+        let lbl = NSTextField(labelWithString: "Button \(index + 1)")
+        lbl.font = .systemFont(ofSize: 13)
+        lbl.textColor = bright
+        lbl.widthAnchor.constraint(equalToConstant: 64).isActive = true
+
+        let field = NSTextField()
+        field.stringValue = "\(config.buttons[index])"
+        field.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        field.alignment = .center
+        field.widthAnchor.constraint(equalToConstant: 48).isActive = true
+        settingsFields.append(field)
+
+        let unit = NSTextField(labelWithString: "min")
+        unit.font = .systemFont(ofSize: 13)
+        unit.textColor = dimText
+
+        let row = NSStackView(views: [lbl, field, unit])
+        row.orientation = .horizontal
+        row.spacing = 8
+        row.alignment = .centerY
+        return row
+    }
+
     @objc private func openSettings() {
-        let vc = SettingsViewController(config: config)
-        vc.onSave = { [weak self] newConfig in
-            guard let self else { return }
-            self.config = newConfig
-            ConfigManager.shared.save(newConfig)
-            self.refreshSelectButtons()
-            self.settingsPanel?.close()
-            self.settingsPanel = nil
+        let opening = settingsOverlay.isHidden
+        if opening {
+            for (i, f) in settingsFields.enumerated() { f.stringValue = "\(config.buttons[i])" }
+            settingsOverlay.isHidden = false
         }
-        let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 240, height: 226),
-            styleMask: [.titled, .closable, .fullSizeContentView, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        )
-        panel.title = ""
-        panel.titlebarAppearsTransparent = true
-        panel.isMovableByWindowBackground = true
-        panel.level = .floating
-        panel.backgroundColor = NSColor(red: 0.10, green: 0.10, blue: 0.11, alpha: 1)
-        panel.isReleasedWhenClosed = false
-        panel.appearance = NSAppearance(named: .darkAqua)
-        panel.contentViewController = vc
-
-        settingsPanel?.close()
-        settingsPanel = panel
-
-        if let mainFrame = view.window?.frame {
-            panel.setFrameOrigin(NSPoint(x: mainFrame.minX, y: mainFrame.minY - panel.frame.height - 8))
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.15
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            settingsOverlay.animator().alphaValue = opening ? 1 : 0
+        } completionHandler: { [weak self] in
+            if !opening { self?.settingsOverlay.isHidden = true }
         }
-        panel.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func saveSettings() {
+        var newButtons: [Int] = []
+        for field in settingsFields {
+            guard let v = Int(field.stringValue.trimmingCharacters(in: .whitespaces)), v > 0 else {
+                NSSound.beep()
+                return
+            }
+            newButtons.append(v)
+        }
+        config = TimerConfig(buttons: newButtons)
+        ConfigManager.shared.save(config)
+        refreshSelectButtons()
+        openSettings()
     }
 
     // MARK: - Select grid
@@ -570,98 +643,3 @@ class RingView: NSView {
     }
 }
 
-// MARK: - Settings panel
-
-class SettingsViewController: NSViewController {
-    var onSave: ((TimerConfig) -> Void)?
-
-    private var config: TimerConfig
-    private var fields: [NSTextField] = []
-
-    private let bg      = NSColor(red: 0.10, green: 0.10, blue: 0.11, alpha: 1)
-    private let dimText = NSColor(red: 0.38, green: 0.38, blue: 0.40, alpha: 1)
-    private let bright  = NSColor(red: 0.95, green: 0.93, blue: 0.90, alpha: 1)
-
-    init(config: TimerConfig) {
-        self.config = config
-        super.init(nibName: nil, bundle: nil)
-    }
-    required init?(coder: NSCoder) { fatalError() }
-
-    override func loadView() {
-        view = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 226))
-        view.wantsLayer = true
-        view.layer?.backgroundColor = bg.cgColor
-    }
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
-
-        let header = NSTextField(labelWithString: "BUTTON DURATIONS")
-        header.font = .systemFont(ofSize: 10, weight: .semibold)
-        header.textColor = dimText
-        header.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(header)
-
-        let rowViews = (0..<4).map { makeRow(index: $0) }
-
-        let rowStack = NSStackView(views: rowViews)
-        rowStack.orientation = .vertical
-        rowStack.spacing = 10
-        rowStack.alignment = .leading
-        rowStack.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(rowStack)
-
-        let saveBtn = NSButton(title: "Save", target: self, action: #selector(save))
-        saveBtn.bezelStyle = .rounded
-        saveBtn.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(saveBtn)
-
-        NSLayoutConstraint.activate([
-            header.topAnchor.constraint(equalTo: view.topAnchor, constant: 28),
-            header.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-
-            rowStack.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 14),
-            rowStack.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-
-            saveBtn.topAnchor.constraint(equalTo: rowStack.bottomAnchor, constant: 16),
-            saveBtn.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
-        ])
-    }
-
-    private func makeRow(index: Int) -> NSView {
-        let lbl = NSTextField(labelWithString: "Button \(index + 1)")
-        lbl.font = .systemFont(ofSize: 13)
-        lbl.textColor = bright
-        lbl.widthAnchor.constraint(equalToConstant: 64).isActive = true
-
-        let field = NSTextField()
-        field.stringValue = "\(config.buttons[index])"
-        field.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
-        field.alignment = .center
-        field.widthAnchor.constraint(equalToConstant: 48).isActive = true
-        fields.append(field)
-
-        let unit = NSTextField(labelWithString: "min")
-        unit.font = .systemFont(ofSize: 13)
-        unit.textColor = dimText
-
-        let row = NSStackView(views: [lbl, field, unit])
-        row.orientation = .horizontal
-        row.spacing = 8
-        row.alignment = .centerY
-        return row
-    }
-
-    @objc private func save() {
-        var newButtons: [Int] = []
-        for field in fields {
-            guard let v = Int(field.stringValue.trimmingCharacters(in: .whitespaces)), v > 0 else {
-                NSSound.beep()
-                return
-            }
-            newButtons.append(v)
-        }
-        onSave?(TimerConfig(buttons: newButtons))
-    }
-}
