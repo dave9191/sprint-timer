@@ -1,21 +1,36 @@
 import Cocoa
 import AVFoundation
+import Carbon
 
 // MARK: - Config
+
+struct HotkeyDef: Codable, Equatable {
+    var keyCode: UInt32
+    var modifiers: UInt32  // Carbon modifier flags
+}
 
 struct TimerConfig: Codable {
     var buttons: [Int]
     var soundName: String
     var chimeEnabled: Bool
     var showCustomInput: Bool
+    var hotkeys: [HotkeyDef?]
 
-    static let `default` = TimerConfig(buttons: [5, 20, 30, 60], soundName: "Glass", chimeEnabled: true, showCustomInput: false)
+    static let `default` = TimerConfig(
+        buttons: [5, 20, 30, 60],
+        soundName: "Glass",
+        chimeEnabled: true,
+        showCustomInput: false,
+        hotkeys: Array(repeating: nil, count: 6)
+    )
 
-    init(buttons: [Int], soundName: String = "Glass", chimeEnabled: Bool = true, showCustomInput: Bool = false) {
-        self.buttons = buttons
-        self.soundName = soundName
-        self.chimeEnabled = chimeEnabled
+    init(buttons: [Int], soundName: String = "Glass", chimeEnabled: Bool = true,
+         showCustomInput: Bool = false, hotkeys: [HotkeyDef?] = Array(repeating: nil, count: 6)) {
+        self.buttons        = buttons
+        self.soundName      = soundName
+        self.chimeEnabled   = chimeEnabled
         self.showCustomInput = showCustomInput
+        self.hotkeys        = hotkeys
     }
 
     init(from decoder: Decoder) throws {
@@ -24,6 +39,10 @@ struct TimerConfig: Codable {
         soundName       = (try? c.decode(String.self,  forKey: .soundName))       ?? "Glass"
         chimeEnabled    = (try? c.decode(Bool.self,    forKey: .chimeEnabled))    ?? true
         showCustomInput = (try? c.decode(Bool.self,    forKey: .showCustomInput)) ?? false
+        let decoded     = (try? c.decode([HotkeyDef?].self, forKey: .hotkeys))    ?? []
+        var hk: [HotkeyDef?] = Array(repeating: nil, count: 6)
+        for (i, v) in decoded.prefix(6).enumerated() { hk[i] = v }
+        hotkeys = hk
     }
 }
 
@@ -50,6 +69,63 @@ final class ConfigManager {
         let enc = JSONEncoder()
         enc.outputFormatting = .prettyPrinted
         if let data = try? enc.encode(cfg) { try? data.write(to: url) }
+    }
+}
+
+// MARK: - Global hotkey manager
+
+private func carbonHotkeyDispatch(
+    _ callRef: EventHandlerCallRef?,
+    _ event: EventRef?,
+    _ userData: UnsafeMutableRawPointer?
+) -> OSStatus {
+    guard let event = event, let userData = userData else { return noErr }
+    var hkID = EventHotKeyID()
+    GetEventParameter(event,
+                      EventParamName(kEventParamDirectObject),
+                      EventParamType(typeEventHotKeyID),
+                      nil, MemoryLayout<EventHotKeyID>.size, nil, &hkID)
+    Unmanaged<HotkeyManager>.fromOpaque(userData).takeUnretainedValue().fire(id: hkID.id)
+    return noErr
+}
+
+final class HotkeyManager {
+    static let shared = HotkeyManager()
+    private var handlerRef: EventHandlerRef?
+    private var refs: [UInt32: EventHotKeyRef] = [:]
+    private var callbacks: [UInt32: () -> Void] = [:]
+
+    private init() {
+        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
+                                 eventKind: UInt32(kEventHotKeyPressed))
+        InstallEventHandler(
+            GetApplicationEventTarget(),
+            carbonHotkeyDispatch,
+            1, &spec,
+            Unmanaged.passUnretained(self).toOpaque(),
+            &handlerRef
+        )
+    }
+
+    func registerAll(_ entries: [(keyCode: UInt32, modifiers: UInt32, action: () -> Void)]) {
+        for ref in refs.values { UnregisterEventHotKey(ref) }
+        refs.removeAll()
+        callbacks.removeAll()
+        for (i, entry) in entries.enumerated() {
+            let id = UInt32(i + 1)
+            let hkID = EventHotKeyID(signature: OSType(0x53504854), id: id)
+            var ref: EventHotKeyRef?
+            if RegisterEventHotKey(entry.keyCode, entry.modifiers, hkID,
+                                   GetApplicationEventTarget(), 0, &ref) == noErr,
+               let ref = ref {
+                refs[id] = ref
+                callbacks[id] = entry.action
+            }
+        }
+    }
+
+    func fire(id: UInt32) {
+        DispatchQueue.main.async { self.callbacks[id]?() }
     }
 }
 
@@ -240,6 +316,7 @@ class TimerViewController: NSViewController {
     private var customField         : NSTextField!
     private var customTimerView     : CustomTimerView!
     private var customInputToggle   : NSButton!
+    private var hotkeyFields        : [HotkeyField] = []
 
     private let systemSounds = ["Basso", "Blow", "Bottle", "Frog", "Funk", "Glass",
                                  "Hero", "Morse", "Ping", "Pop", "Purr", "Sosumi",
@@ -288,6 +365,27 @@ class TimerViewController: NSViewController {
         view.addSubview(settingsBtn)
 
         showSelect()
+        registerHotkeys()
+    }
+
+    // MARK: - Hotkeys
+
+    private func registerHotkeys() {
+        let btns = config.buttons
+        let actions: [() -> Void] = [
+            { [weak self] in self?.startTimer(btns[0]) },
+            { [weak self] in self?.startTimer(btns[1]) },
+            { [weak self] in self?.startTimer(btns[2]) },
+            { [weak self] in self?.startTimer(btns[3]) },
+            { [weak self] in self?.togglePause() },
+            { [weak self] in self?.resetTimer() },
+        ]
+        let entries: [(keyCode: UInt32, modifiers: UInt32, action: () -> Void)] =
+            config.hotkeys.enumerated().compactMap { (i, def) in
+                guard let def = def else { return nil }
+                return (keyCode: def.keyCode, modifiers: def.modifiers, action: actions[i])
+            }
+        HotkeyManager.shared.registerAll(entries)
     }
 
     // MARK: - Chime toggle
@@ -370,6 +468,34 @@ class TimerViewController: NSViewController {
             settingsOverlay.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
 
+        // Save button pinned to bottom
+        let saveBtn = NSButton(title: "Save", target: self, action: #selector(saveSettings))
+        saveBtn.bezelStyle = .rounded
+        saveBtn.translatesAutoresizingMaskIntoConstraints = false
+        settingsOverlay.addSubview(saveBtn)
+        NSLayoutConstraint.activate([
+            saveBtn.bottomAnchor.constraint(equalTo: settingsOverlay.bottomAnchor, constant: -14),
+            saveBtn.centerXAnchor.constraint(equalTo: settingsOverlay.centerXAnchor),
+        ])
+
+        // Scroll view fills overlay above save button
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.drawsBackground = false
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        settingsOverlay.addSubview(scrollView)
+        NSLayoutConstraint.activate([
+            scrollView.topAnchor.constraint(equalTo: settingsOverlay.topAnchor, constant: 20),
+            scrollView.leadingAnchor.constraint(equalTo: settingsOverlay.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: settingsOverlay.trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: saveBtn.topAnchor, constant: -8),
+        ])
+
+        let docView = FlippedView()
+        docView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.documentView = docView
+
         // Button durations section
         settingsFields = []
         let buttonRows = (0..<4).map { makeSettingsRow(index: $0) }
@@ -397,12 +523,24 @@ class TimerViewController: NSViewController {
         customInputToggle = NSButton(checkboxWithTitle: "Show custom input", target: self, action: #selector(customInputChanged))
         customInputToggle.state = config.showCustomInput ? .on : .off
 
+        // Hotkeys section
+        hotkeyFields = []
+        let hotkeyLabels = ["Start Timer 1", "Start Timer 2", "Start Timer 3",
+                            "Start Timer 4", "Pause / Resume", "Cancel"]
+        let hotkeyRows = hotkeyLabels.enumerated().map { (i, lbl) -> NSView in
+            let field = HotkeyField(def: config.hotkeys[i])
+            hotkeyFields.append(field)
+            return makeHotkeyRow(label: lbl, field: field)
+        }
+
         let durHeader = sectionHeader("BUTTON DURATIONS")
         let sndHeader = sectionHeader("SOUND")
+        let hkHeader  = sectionHeader("HOTKEYS")
 
         let contentStack = NSStackView(views:
             [durHeader] + buttonRows +
-            [sndHeader, soundRow, chimeDefaultToggle, customInputToggle]
+            [sndHeader, soundRow, chimeDefaultToggle, customInputToggle,
+             hkHeader] + hotkeyRows
         )
         contentStack.orientation = .vertical
         contentStack.spacing = 6
@@ -411,19 +549,17 @@ class TimerViewController: NSViewController {
         contentStack.setCustomSpacing(10, after: buttonRows.last!)
         contentStack.setCustomSpacing(6,  after: sndHeader)
         contentStack.setCustomSpacing(10, after: chimeDefaultToggle)
+        contentStack.setCustomSpacing(10, after: customInputToggle)
+        contentStack.setCustomSpacing(8,  after: hkHeader)
         contentStack.translatesAutoresizingMaskIntoConstraints = false
-        settingsOverlay.addSubview(contentStack)
-
-        let saveBtn = NSButton(title: "Save", target: self, action: #selector(saveSettings))
-        saveBtn.bezelStyle = .rounded
-        saveBtn.translatesAutoresizingMaskIntoConstraints = false
-        settingsOverlay.addSubview(saveBtn)
+        docView.addSubview(contentStack)
 
         NSLayoutConstraint.activate([
-            contentStack.topAnchor.constraint(equalTo: settingsOverlay.topAnchor, constant: 30),
-            contentStack.centerXAnchor.constraint(equalTo: settingsOverlay.centerXAnchor),
-            saveBtn.topAnchor.constraint(equalTo: contentStack.bottomAnchor, constant: 14),
-            saveBtn.centerXAnchor.constraint(equalTo: settingsOverlay.centerXAnchor),
+            contentStack.topAnchor.constraint(equalTo: docView.topAnchor, constant: 10),
+            contentStack.leadingAnchor.constraint(equalTo: docView.leadingAnchor, constant: 20),
+            contentStack.trailingAnchor.constraint(equalTo: docView.trailingAnchor, constant: -20),
+            contentStack.bottomAnchor.constraint(equalTo: docView.bottomAnchor, constant: -10),
+            docView.widthAnchor.constraint(equalTo: scrollView.widthAnchor),
         ])
     }
 
@@ -432,6 +568,22 @@ class TimerViewController: NSViewController {
         lbl.font = .systemFont(ofSize: 10, weight: .semibold)
         lbl.textColor = dimText
         return lbl
+    }
+
+    private func makeHotkeyRow(label: String, field: HotkeyField) -> NSView {
+        let lbl = NSTextField(labelWithString: label)
+        lbl.font = .systemFont(ofSize: 12)
+        lbl.textColor = bright
+        lbl.widthAnchor.constraint(equalToConstant: 92).isActive = true
+
+        field.widthAnchor.constraint(equalToConstant: 108).isActive = true
+        field.heightAnchor.constraint(equalToConstant: 24).isActive = true
+
+        let row = NSStackView(views: [lbl, field])
+        row.orientation = .horizontal
+        row.spacing = 8
+        row.alignment = .centerY
+        return row
     }
 
     @objc private func chimeDefaultChanged() {
@@ -481,12 +633,14 @@ class TimerViewController: NSViewController {
             for (i, f) in settingsFields.enumerated() { f.stringValue = "\(config.buttons[i])" }
             chimeDefaultToggle.state = chimeOn ? .on : .off
             customInputToggle.state  = config.showCustomInput ? .on : .off
+            for (i, hf) in hotkeyFields.enumerated() { hf.hotkeyDef = config.hotkeys[i] }
             settingsOverlay.isHidden = false
             escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 if event.keyCode == 53 { self?.openSettings(); return nil }
                 return event
             }
         } else {
+            hotkeyFields.forEach { $0.cancelRecording() }
             if let m = escMonitor { NSEvent.removeMonitor(m); escMonitor = nil }
         }
         NSAnimationContext.runAnimationGroup { ctx in
@@ -515,10 +669,12 @@ class TimerViewController: NSViewController {
             buttons: newButtons,
             soundName: soundPopup.titleOfSelectedItem ?? config.soundName,
             chimeEnabled: chimeDefaultToggle.state == .on,
-            showCustomInput: customInputToggle.state == .on
+            showCustomInput: customInputToggle.state == .on,
+            hotkeys: hotkeyFields.map { $0.hotkeyDef }
         )
         ConfigManager.shared.save(config)
         refreshSelectButtons()
+        registerHotkeys()
         openSettings()
     }
 
@@ -865,5 +1021,196 @@ private class ContentView: NSView {
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(nil)
         super.mouseDown(with: event)
+    }
+}
+
+// MARK: - Scroll view document helper
+
+private class FlippedView: NSView {
+    override var isFlipped: Bool { true }
+}
+
+// MARK: - Hotkey recorder field
+
+class HotkeyField: NSView {
+    var hotkeyDef: HotkeyDef? { didSet { update() } }
+
+    private let label    = NSTextField(labelWithString: "")
+    private let clearBtn = NSButton()
+    private var recording   = false
+    private var keyMonitor  : Any?
+
+    private let surface       = NSColor(red: 0.18, green: 0.18, blue: 0.20, alpha: 1)
+    private let hoveredColor  = NSColor(red: 0.23, green: 0.23, blue: 0.25, alpha: 1)
+    private let recordingBg   = NSColor(red: 0.12, green: 0.20, blue: 0.34, alpha: 1)
+    private let dimText       = NSColor(red: 0.38, green: 0.38, blue: 0.40, alpha: 1)
+    private let bright        = NSColor(red: 0.95, green: 0.93, blue: 0.90, alpha: 1)
+    private let accentBorder  = NSColor(red: 0.30, green: 0.50, blue: 0.85, alpha: 1)
+
+    // Modifier key codes — ignore these as standalone keypresses
+    private let modifierCodes: Set<UInt32> = [54, 55, 56, 57, 58, 59, 60, 61, 62, 63]
+
+    init(def: HotkeyDef? = nil) {
+        self.hotkeyDef = def
+        super.init(frame: .zero)
+        setup()
+        update()
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func setup() {
+        wantsLayer = true
+        layer?.cornerRadius = 5
+        layer?.borderWidth = 0.5
+
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        label.alignment = .center
+        addSubview(label)
+
+        clearBtn.translatesAutoresizingMaskIntoConstraints = false
+        clearBtn.isBordered = false
+        clearBtn.bezelStyle = .regularSquare
+        clearBtn.font = .systemFont(ofSize: 13, weight: .light)
+        clearBtn.title = "×"
+        clearBtn.contentTintColor = dimText
+        clearBtn.target = self
+        clearBtn.action = #selector(clear)
+        addSubview(clearBtn)
+
+        NSLayoutConstraint.activate([
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.centerXAnchor.constraint(equalTo: centerXAnchor),
+            clearBtn.centerYAnchor.constraint(equalTo: centerYAnchor),
+            clearBtn.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
+            clearBtn.widthAnchor.constraint(equalToConstant: 18),
+        ])
+
+        addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(startRecording)))
+    }
+
+    private func update() {
+        if recording {
+            label.stringValue = "Type shortcut…"
+            label.textColor   = bright.withAlphaComponent(0.65)
+            layer?.backgroundColor = recordingBg.cgColor
+            layer?.borderColor = accentBorder.cgColor
+        } else if let def = hotkeyDef {
+            label.stringValue = hotkeyString(def)
+            label.textColor   = bright
+            layer?.backgroundColor = surface.cgColor
+            layer?.borderColor = NSColor.white.withAlphaComponent(0.09).cgColor
+        } else {
+            label.stringValue = "—"
+            label.textColor   = dimText
+            layer?.backgroundColor = surface.cgColor
+            layer?.borderColor = NSColor.white.withAlphaComponent(0.09).cgColor
+        }
+        clearBtn.isHidden = hotkeyDef == nil || recording
+    }
+
+    @objc private func startRecording() {
+        guard !recording else { return }
+        recording = true
+        update()
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            self?.handleKey(event)
+            return nil  // consume all keys while recording
+        }
+    }
+
+    func cancelRecording() {
+        guard recording else { return }
+        stopRecording()
+    }
+
+    private func stopRecording() {
+        if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
+        recording = false
+        update()
+    }
+
+    private func handleKey(_ event: NSEvent) {
+        let keyCode = UInt32(event.keyCode)
+
+        // Ignore bare modifier keypresses
+        if modifierCodes.contains(keyCode) { return }
+
+        // ESC cancels recording without changing the hotkey
+        if keyCode == 53 {
+            stopRecording()
+            return
+        }
+
+        // Delete/Backspace with no modifier clears the hotkey
+        let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        if keyCode == 51 && flags.isEmpty {
+            hotkeyDef = nil
+            stopRecording()
+            return
+        }
+
+        // Require at least Cmd, Opt, or Ctrl (shift-only combos are too collision-prone)
+        let significant = event.modifierFlags.intersection([.command, .option, .control])
+        guard !significant.isEmpty else { return }
+
+        hotkeyDef = HotkeyDef(keyCode: keyCode,
+                               modifiers: carbonMods(from: event.modifierFlags))
+        stopRecording()
+    }
+
+    @objc private func clear() {
+        hotkeyDef = nil
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach { removeTrackingArea($0) }
+        addTrackingArea(NSTrackingArea(rect: bounds,
+                                       options: [.mouseEnteredAndExited, .activeAlways],
+                                       owner: self))
+    }
+    override func mouseEntered(with event: NSEvent) {
+        guard !recording else { return }
+        layer?.backgroundColor = hoveredColor.cgColor
+    }
+    override func mouseExited(with event: NSEvent) {
+        guard !recording else { return }
+        layer?.backgroundColor = surface.cgColor
+    }
+
+    private func hotkeyString(_ def: HotkeyDef) -> String {
+        var s = ""
+        if def.modifiers & UInt32(controlKey) != 0 { s += "⌃" }
+        if def.modifiers & UInt32(optionKey)  != 0 { s += "⌥" }
+        if def.modifiers & UInt32(shiftKey)   != 0 { s += "⇧" }
+        if def.modifiers & UInt32(cmdKey)     != 0 { s += "⌘" }
+        s += keyName(def.keyCode)
+        return s
+    }
+
+    private func keyName(_ code: UInt32) -> String {
+        let table: [UInt32: String] = [
+             0:"A",  1:"S",  2:"D",  3:"F",  4:"H",  5:"G",  6:"Z",  7:"X",
+             8:"C",  9:"V", 11:"B", 12:"Q", 13:"W", 14:"E", 15:"R",
+            16:"Y", 17:"T", 18:"1", 19:"2", 20:"3", 21:"4", 22:"6",
+            23:"5", 24:"=", 25:"9", 26:"7", 27:"-", 28:"8", 29:"0",
+            30:"]", 31:"O", 32:"U", 33:"[", 34:"I", 35:"P", 36:"↩",
+            37:"L", 38:"J", 39:"'", 40:"K", 41:";", 42:"\\", 43:",",
+            44:"/", 45:"N", 46:"M", 47:".", 48:"⇥", 49:"Spc", 50:"`",
+            51:"⌫", 96:"F5", 97:"F6", 98:"F7", 99:"F3", 100:"F8",
+            101:"F9", 103:"F11", 109:"F10", 111:"F12", 118:"F4",
+            120:"F2", 122:"F1", 123:"←", 124:"→", 125:"↓", 126:"↑"
+        ]
+        return table[code] ?? "(\(code))"
+    }
+
+    private func carbonMods(from flags: NSEvent.ModifierFlags) -> UInt32 {
+        var m: UInt32 = 0
+        if flags.contains(.command) { m |= UInt32(cmdKey) }
+        if flags.contains(.shift)   { m |= UInt32(shiftKey) }
+        if flags.contains(.option)  { m |= UInt32(optionKey) }
+        if flags.contains(.control) { m |= UInt32(controlKey) }
+        return m
     }
 }
