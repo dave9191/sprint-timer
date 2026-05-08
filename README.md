@@ -12,9 +12,11 @@ A minimal macOS focus timer designed for ADHD brains. No tasks, no productivity 
 - **Custom duration** — optional input field for any length sprint (off by default, toggle in Settings)
 - **Overtime tracking** — when the timer expires the ring empties, the background pulses red, and an overtime counter shows how far over you've gone
 - **Notification chime** — a double chime plays on expiry; choose from all 14 macOS system sounds or disable it entirely
+- **Global hotkeys** — system-wide keyboard shortcuts to start each of the four timers, pause/resume, and cancel; none set by default, fully configurable in Settings
+- **Schedule bars** — slim progress bars along the bottom edge showing how far through one or more named time ranges you are (e.g. Day, Work shift); off by default, enable and configure in Settings
 - **Floating window** — always on top, visible across all Spaces, never steals focus
 - **Remembers position** — the window reopens on the same display and at the same position it was last closed
-- **Settings overlay** — configure preset durations, notification sound, default chime state, and custom input visibility without leaving the app
+- **Tabbed settings** — settings are split across three tabs (General, Hot Keys, Schedules) for easier navigation
 - **Single-file build** — no Xcode, no package manager, just `swiftc`
 
 ---
@@ -69,6 +71,8 @@ open SprintTimer.app
 | Click bell icon | Toggle chime for this session |
 | Click gear icon | Open settings |
 | Type a number + Enter | Start custom duration (if enabled) |
+| Global hotkey | Start timer, pause/resume, or cancel (if configured) |
+| Hover over schedule bars | Show instant tooltip with name, time range, and % progress |
 | ESC | Close settings without saving |
 | Close window | Quit the app |
 
@@ -76,7 +80,9 @@ open SprintTimer.app
 
 ## Settings
 
-Open settings with the **⚙** icon in the bottom-left corner.
+Open settings with the **⚙** icon in the bottom-left corner. Settings are split into three tabs.
+
+### General
 
 | Setting | Description |
 |---|---|
@@ -84,6 +90,47 @@ Open settings with the **⚙** icon in the bottom-left corner.
 | Sound | Choose which system sound plays on expiry |
 | On by default | Whether the chime starts enabled each session |
 | Show custom input | Show/hide the custom duration input field |
+
+### Hot Keys
+
+Assign system-wide keyboard shortcuts to any of the six actions:
+
+| Action | Description |
+|---|---|
+| Start Timer 1–4 | Immediately start the corresponding preset duration |
+| Pause / Resume | Toggle pause on the running timer |
+| Cancel | Stop the timer and return to the selection screen |
+
+Click a hotkey field and press your desired key combination to record it. Click **×** to clear a shortcut. No shortcuts are set by default.
+
+### Schedules
+
+| Setting | Description |
+|---|---|
+| Show schedule bars | Toggle the progress bar strip at the bottom of the window |
+| Time ranges | Each row defines a named range with a start and end time; use the stepper to set times |
+| + Add | Add a new time range row |
+| × | Remove a time range row |
+
+Ranges that cross midnight (end time earlier than start time) are handled automatically. Up to five ranges display cleanly; more are supported but bars become very thin.
+
+---
+
+## Schedule bars
+
+When enabled, a strip of slim bars appears along the bottom edge of the window. Each bar fills from left to right as the current time moves through its range. Hovering over a bar shows an instant tooltip:
+
+```
+Work
+09:00 – 17:30
+62%
+```
+
+The tooltip shows "not started" before the range begins and "complete" after it ends.
+
+---
+
+## Settings storage
 
 Settings are saved to `~/.config/sprint-timer/config.json` the first time you change them. The file is only created on save — if it doesn't exist the app uses its defaults.
 
