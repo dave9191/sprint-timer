@@ -34,7 +34,7 @@ struct TimerConfig: Codable {
             ScheduleRange(name: "Day",  startMinutes: 0,   endMinutes: 1439),
             ScheduleRange(name: "Work", startMinutes: 600, endMinutes: 1080),
         ],
-        schedulesEnabled: true
+        schedulesEnabled: false
     )
 
     init(buttons: [Int], soundName: String = "Glass", chimeEnabled: Bool = true,
@@ -44,7 +44,7 @@ struct TimerConfig: Codable {
              ScheduleRange(name: "Day",  startMinutes: 0,   endMinutes: 1439),
              ScheduleRange(name: "Work", startMinutes: 600, endMinutes: 1080),
          ],
-         schedulesEnabled: Bool = true) {
+         schedulesEnabled: Bool = false) {
         self.buttons          = buttons
         self.soundName        = soundName
         self.chimeEnabled     = chimeEnabled
@@ -68,7 +68,7 @@ struct TimerConfig: Codable {
             ScheduleRange(name: "Day",  startMinutes: 0,   endMinutes: 1439),
             ScheduleRange(name: "Work", startMinutes: 600, endMinutes: 1080),
         ]
-        schedulesEnabled = (try? c.decode(Bool.self, forKey: .schedulesEnabled)) ?? true
+        schedulesEnabled = (try? c.decode(Bool.self, forKey: .schedulesEnabled)) ?? false
     }
 }
 
