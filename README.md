@@ -74,8 +74,10 @@ open SprintTimer.app
 | Action | Result |
 |---|---|
 | Click a round button | Start that duration |
-| Click pause icon | Pause / resume |
-| Click reset icon | Return to timer selection |
+| Click pause icon | Pause / resume the running timer |
+| Click pause icon (after expiry) | Restart the same timer from the beginning |
+| Click restart icon (↺) | Restart the same timer from the beginning |
+| Click back icon (‹) | Cancel the timer and return to the selection screen |
 | Click bell icon | Toggle chime for this session |
 | Click gear icon | Open settings |
 | Type a number + Enter | Start custom duration (if enabled) |

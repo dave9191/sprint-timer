@@ -310,6 +310,7 @@ class TimerViewController: NSViewController {
     private let overLabel    = NSTextField(labelWithString: "")
     private let pauseBtn     = NSButton()
     private let resetBtn     = NSButton()
+    private let backBtn      = NSButton()
     private let chimeToggle  = NSButton()
     private let settingsBtn  = NSButton()
     private let selectStack  = NSStackView()
@@ -374,6 +375,7 @@ class TimerViewController: NSViewController {
         buildScheduleBarsView()   // must come before controls so they can pin to its top
         buildChimeToggle()
         buildSettingsButton()
+        buildBackButton()
         buildSettingsOverlay()
 
         [titleLabel, selectStack, timerStack].forEach {
@@ -392,12 +394,14 @@ class TimerViewController: NSViewController {
             selectStack.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: -10),
             timerStack.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             timerStack.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            backBtn.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 4),
         ])
 
         // overlay above main content; controls always on top of overlay
         view.addSubview(settingsOverlay)
         view.addSubview(chimeToggle)
         view.addSubview(settingsBtn)
+        view.addSubview(backBtn)
 
         showSelect()
         registerHotkeys()
@@ -483,6 +487,30 @@ class TimerViewController: NSViewController {
     }
 
     // MARK: - Settings button
+
+    private func buildBackButton() {
+        backBtn.translatesAutoresizingMaskIntoConstraints = false
+        backBtn.bezelStyle = .regularSquare
+        backBtn.isBordered = false
+        backBtn.wantsLayer = true
+        backBtn.layer?.backgroundColor = NSColor.clear.cgColor
+        backBtn.title = ""
+        backBtn.imagePosition = .imageOnly
+        backBtn.target = self
+        backBtn.action = #selector(resetTimer)
+        backBtn.widthAnchor.constraint(equalToConstant: 22).isActive = true
+        backBtn.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        if let img = NSImage(systemSymbolName: "chevron.left", accessibilityDescription: "Back") {
+            let cfg = NSImage.SymbolConfiguration(pointSize: 11, weight: .light)
+            backBtn.image = img.withSymbolConfiguration(cfg)
+            backBtn.contentTintColor = dimText
+        }
+        backBtn.toolTip = "Back"
+        backBtn.isHidden = true
+        view.addSubview(backBtn)
+        // vertical constraint added in viewDidLoad after titleLabel is in the hierarchy
+        backBtn.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8).isActive = true
+    }
 
     private func buildSettingsButton() {
         settingsBtn.translatesAutoresizingMaskIntoConstraints = false
@@ -997,9 +1025,9 @@ class TimerViewController: NSViewController {
         pauseBtn.target = self
         pauseBtn.action = #selector(togglePause)
 
-        buildIconBtn(resetBtn, sfName: "arrow.counterclockwise", tip: "Reset")
+        buildIconBtn(resetBtn, sfName: "arrow.counterclockwise", tip: "Restart")
         resetBtn.target = self
-        resetBtn.action = #selector(resetTimer)
+        resetBtn.action = #selector(restartTimer)
 
         let btnRow = NSStackView(views: [pauseBtn, resetBtn])
         btnRow.orientation = .horizontal
@@ -1090,6 +1118,10 @@ class TimerViewController: NSViewController {
                   tip:    isPaused ? "Resume"    : "Pause")
     }
 
+    @objc private func restartTimer() {
+        startTimer(totalSecs / 60)
+    }
+
     @objc private func resetTimer() {
         ticker?.invalidate()
         ticker = nil
@@ -1160,9 +1192,14 @@ class TimerViewController: NSViewController {
     private func showSelect() {
         selectStack.isHidden = false
         timerStack.isHidden = true
+        backBtn.isHidden = true
         view.window?.makeFirstResponder(nil)
     }
-    private func showTimer()  { selectStack.isHidden = true;  timerStack.isHidden = false }
+    private func showTimer() {
+        selectStack.isHidden = true
+        timerStack.isHidden = false
+        backBtn.isHidden = false
+    }
 }
 
 // MARK: - Segmented Ring
